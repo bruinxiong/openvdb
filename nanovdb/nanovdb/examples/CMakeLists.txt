@@ -1,5 +1,5 @@
 # Copyright Contributors to the OpenVDB Project
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 #[=======================================================================[
 
@@ -7,7 +7,7 @@
 
 #]=======================================================================]
 
-cmake_minimum_required(VERSION 3.18)
+cmake_minimum_required(VERSION 3.24)
 project(NanoVDBExamples LANGUAGES CXX)
 
 include(GNUInstallDirs)
@@ -78,7 +78,7 @@ function(NANOVDB_EXAMPLE)
   target_include_directories(${EXAMPLE_NAME} PUBLIC ex_util)
   target_link_libraries(${EXAMPLE_NAME} PRIVATE nanovdb)
 
-  install(TARGETS ${EXAMPLE_NAME} DESTINATION ${CMAKE_INSTALL_DOCDIR}/examples)
+  install(TARGETS ${EXAMPLE_NAME} DESTINATION ${NANOVDB_INSTALL_DOCDIR}/examples)
 endfunction()
 
 # -----------------------------------------------------------------------
@@ -100,14 +100,46 @@ nanovdb_example(NAME "ex_read_nanovdb_sphere")
 nanovdb_example(NAME "ex_read_nanovdb_sphere_accessor")
 nanovdb_example(NAME "ex_read_nanovdb_sphere_accessor_cuda")
 nanovdb_example(NAME "ex_index_grid_cuda")
-nanovdb_example(NAME "ex_nodemanager_cuda")
+nanovdb_example(NAME "ex_nodemanager_cuda" OPENVDB)
 nanovdb_example(NAME "ex_voxels_to_grid_cuda")
+nanovdb_example(NAME "ex_voxels_to_grid_mgpu")
 nanovdb_example(NAME "ex_modify_nanovdb_thrust")
 nanovdb_example(NAME "ex_map_pool_buffer")
 nanovdb_example(NAME "ex_bump_pool_buffer")
 nanovdb_example(NAME "ex_collide_level_set")
 nanovdb_example(NAME "ex_raytrace_fog_volume")
 nanovdb_example(NAME "ex_raytrace_level_set")
+nanovdb_example(NAME "ex_raytrace_iso_surface")
+nanovdb_example(NAME "ex_dilate_nanovdb_cuda" OPENVDB)
+nanovdb_example(NAME "ex_merge_nanovdb_cuda" OPENVDB)
+nanovdb_example(NAME "ex_refine_nanovdb_cuda" OPENVDB)
+nanovdb_example(NAME "ex_coarsen_nanovdb_cuda" OPENVDB)
+nanovdb_example(NAME "ex_mesh_to_grid_cuda" OPENVDB)
+
+if(CUDAToolkit_FOUND)
+  # ex_make_mgpu_nanovdb uses TF32 WMMA which requires SM_80+ (Ampere or newer).
+  # Gate on CMAKE_CUDA_ARCHITECTURES (what the build actually targets) rather than
+  # probing the configure-time machine's GPU: the two can differ (cross-compiling,
+  # building on one machine to run on another, CI runners without a GPU), and
+  # probing via "bash -c nvidia-smi ..." isn't portable to Windows either way.
+  set(_nanovdb_has_sm80 OFF)
+  foreach(_cuda_arch IN LISTS CMAKE_CUDA_ARCHITECTURES)
+    string(REGEX MATCH "^[0-9]+" _cuda_arch_number "${_cuda_arch}")
+    if(_cuda_arch_number GREATER_EQUAL 80)
+      set(_nanovdb_has_sm80 ON)
+    endif()
+  endforeach()
+
+  if(_nanovdb_has_sm80)
+    nanovdb_example(NAME "ex_make_mgpu_nanovdb") # requires cuRAND and SM_80+ (TF32 WMMA)
+    target_link_libraries(ex_make_mgpu_nanovdb PRIVATE CUDA::curand)
+  else()
+    message(STATUS "Skipping ex_make_mgpu_nanovdb: requires CUDA architecture 80 or newer (CMAKE_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES})")
+  endif()
+  unset(_nanovdb_has_sm80)
+  unset(_cuda_arch_number)
+  unset(_cuda_arch)
+endif()
 
 if(NANOVDB_USE_MAGICAVOXEL)
   nanovdb_example(NAME "ex_vox_to_nanovdb")

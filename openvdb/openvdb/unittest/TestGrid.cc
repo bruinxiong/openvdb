@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 #include <openvdb/Exceptions.h>
 #include <openvdb/openvdb.h>
@@ -40,6 +40,11 @@ public:
     using Ptr = openvdb::SharedPtr<ProxyTree>;
     using ConstPtr = openvdb::SharedPtr<const ProxyTree>;
 
+    using Accessor = void;
+    using ConstAccessor = void;
+    using UnsafeAccessor = void;
+    using ConstUnsafeAccessor = void;
+
     static const openvdb::Index DEPTH;
     static const ValueType backg;
 
@@ -55,22 +60,30 @@ public:
 
     TreeBasePtr copy() const override { return TreeBasePtr(new ProxyTree(*this)); }
 
+#if OPENVDB_ABI_VERSION_NUMBER < 14
     void readTopology(std::istream& is, bool = false) override { is.seekg(0, std::ios::beg); }
     void writeTopology(std::ostream& os, bool = false) const override { os.seekp(0); }
 
     void readBuffers(std::istream& is,
         const openvdb::CoordBBox&, bool /*saveFloatAsHalf*/=false) override { is.seekg(0); }
+
     void readNonresidentBuffers() const override {}
+
     void readBuffers(std::istream& is, bool /*saveFloatAsHalf*/=false) override { is.seekg(0); }
     void writeBuffers(std::ostream& os, bool /*saveFloatAsHalf*/=false) const override
         { os.seekp(0, std::ios::beg); }
+#endif // OPENVDB_ABI_VERSION_NUMBER < 14
 
     bool empty() const { return true; }
     void clear() {}
     void prune(const ValueType& = 0) {}
     void clip(const openvdb::CoordBBox&) {}
     void clipUnallocatedNodes() override {}
+#if OPENVDB_ABI_VERSION_NUMBER >= 12
+    openvdb::Index64 unallocatedLeafCount() const override { return 0; }
+#else
     openvdb::Index32 unallocatedLeafCount() const override { return 0; }
+#endif
 
     void getIndexRange(openvdb::CoordBBox&) const override {}
     bool evalLeafBoundingBox(openvdb::CoordBBox& bbox) const override
@@ -83,10 +96,17 @@ public:
         { dim = openvdb::Coord(0, 0, 0); return false; }
 
     openvdb::Index treeDepth() const override { return 0; }
-    openvdb::Index leafCount() const override { return 0; }
+#if OPENVDB_ABI_VERSION_NUMBER >= 12
+    openvdb::Index64 leafCount() const override { return 0; }
+    std::vector<openvdb::Index64> nodeCount() const override
+        { return std::vector<openvdb::Index64>(DEPTH, 0); }
+    openvdb::Index64 nonLeafCount() const override { return 0; }
+#else
+    openvdb::Index32 leafCount() const override { return 0; }
     std::vector<openvdb::Index32> nodeCount() const override
         { return std::vector<openvdb::Index32>(DEPTH, 0); }
-    openvdb::Index nonLeafCount() const override { return 0; }
+    openvdb::Index32 nonLeafCount() const override { return 0; }
+#endif
     openvdb::Index64 activeVoxelCount() const override { return 0UL; }
     openvdb::Index64 inactiveVoxelCount() const override { return 0UL; }
     openvdb::Index64 activeLeafVoxelCount() const override { return 0UL; }
@@ -145,11 +165,24 @@ TEST_F(TestGrid, testGetGrid)
 
     EXPECT_TRUE(grid->baseTreePtr());
 
-    EXPECT_TRUE(!gridPtrCast<DoubleGrid>(grid));
+    EXPECT_TRUE(gridPtrCast<FloatGrid>(grid));
     EXPECT_TRUE(!gridPtrCast<DoubleGrid>(grid));
 
     EXPECT_TRUE(gridConstPtrCast<FloatGrid>(constGrid));
     EXPECT_TRUE(!gridConstPtrCast<DoubleGrid>(constGrid));
+
+    GridBase::Ptr halfGrid = HalfGrid::create(/*bg=*/Half(0.0));
+    GridBase::ConstPtr constHalfGrid = halfGrid;
+
+    EXPECT_TRUE(halfGrid->baseTreePtr());
+
+    EXPECT_TRUE(gridPtrCast<HalfGrid>(halfGrid));
+    EXPECT_TRUE(!gridPtrCast<FloatGrid>(halfGrid));
+    EXPECT_TRUE(!gridPtrCast<DoubleGrid>(halfGrid));
+
+    EXPECT_TRUE(gridConstPtrCast<HalfGrid>(constHalfGrid));
+    EXPECT_TRUE(!gridConstPtrCast<FloatGrid>(constHalfGrid));
+    EXPECT_TRUE(!gridConstPtrCast<DoubleGrid>(constHalfGrid));
 }
 
 
@@ -160,6 +193,11 @@ TEST_F(TestGrid, testIsType)
     GridBase::Ptr grid = FloatGrid::create();
     EXPECT_TRUE(grid->isType<FloatGrid>());
     EXPECT_TRUE(!grid->isType<DoubleGrid>());
+
+    GridBase::Ptr halfGrid = HalfGrid::create();
+    EXPECT_TRUE(halfGrid->isType<HalfGrid>());
+    EXPECT_TRUE(!halfGrid->isType<FloatGrid>());
+    EXPECT_TRUE(!halfGrid->isType<DoubleGrid>());
 }
 
 
@@ -265,7 +303,7 @@ TEST_F(TestGrid, testCopyGrid)
     // shallow-copy a const grid but supply a new transform and meta map
     EXPECT_EQ(1.0, grid1->transform().voxelSize().x());
     EXPECT_EQ(size_t(0), grid1->metaCount());
-    EXPECT_EQ(Index(2), grid1->tree().leafCount());
+    EXPECT_EQ(Index64(2), grid1->tree().leafCount());
 
     math::Transform::Ptr xform(math::Transform::createLinearTransform(/*voxelSize=*/0.25));
     MetaMap meta;
@@ -278,7 +316,7 @@ TEST_F(TestGrid, testCopyGrid)
 
     EXPECT_EQ(0.25, grid3->transform().voxelSize().x());
     EXPECT_EQ(size_t(1), grid3->metaCount());
-    EXPECT_EQ(Index(2), tree3.leafCount());
+    EXPECT_EQ(Index64(2), tree3.leafCount());
     EXPECT_EQ(long(3), constGrid1->constTreePtr().use_count());
 }
 
@@ -510,5 +548,131 @@ TEST_F(TestGrid, testApply)
         EXPECT_TRUE( floatCGrid->apply<AllowedGridTypes>([&n](const GridBase&) { ++n; }));
         EXPECT_TRUE(doubleCGrid->apply<AllowedGridTypes>([&n](const GridBase&) { ++n; }));
         EXPECT_EQ(4, n);
+    }
+}
+
+TEST_F(TestGrid, testAdapter)
+{
+    openvdb::FloatGrid floatGrid;
+    const openvdb::FloatGrid constFloatGrid = floatGrid;
+    openvdb::FloatTree& floatTree = floatGrid.tree();
+    const openvdb::FloatTree& constFloatTree = floatGrid.constTree();
+    openvdb::tree::ValueAccessor<openvdb::FloatTree> floatAcc(floatGrid.tree());
+    openvdb::tree::ValueAccessor<const openvdb::FloatTree> constFloatAcc(floatGrid.constTree());
+
+    {
+        // test TreeAdapter<Tree>
+
+        using AdapterT = openvdb::TreeAdapter<openvdb::FloatTree>;
+
+        AdapterT::tree(floatTree);
+        AdapterT::tree(floatGrid);
+        AdapterT::tree(constFloatTree);
+        AdapterT::tree(constFloatGrid);
+        AdapterT::constTree(floatTree);
+        AdapterT::constTree(floatGrid);
+        AdapterT::constTree(constFloatTree);
+        AdapterT::constTree(constFloatGrid);
+
+        // test TreeAdapter<const Tree>
+
+        using ConstAdapterT = openvdb::TreeAdapter<const openvdb::FloatTree>;
+
+        ConstAdapterT::tree(floatTree);
+        ConstAdapterT::tree(floatGrid);
+        ConstAdapterT::tree(constFloatTree);
+        ConstAdapterT::tree(constFloatGrid);
+        ConstAdapterT::constTree(floatTree);
+        ConstAdapterT::constTree(floatGrid);
+        ConstAdapterT::constTree(constFloatTree);
+        ConstAdapterT::constTree(constFloatGrid);
+    }
+
+    {
+        // test TreeAdapter<Grid>
+
+        using AdapterT = openvdb::TreeAdapter<openvdb::FloatGrid>;
+
+        AdapterT::tree(floatTree);
+        AdapterT::tree(floatGrid);
+        AdapterT::tree(constFloatTree);
+        AdapterT::tree(constFloatGrid);
+        AdapterT::constTree(floatTree);
+        AdapterT::constTree(floatGrid);
+        AdapterT::constTree(constFloatTree);
+        AdapterT::constTree(constFloatGrid);
+
+        // test TreeAdapter<const Grid>
+
+        using ConstAdapterT = openvdb::TreeAdapter<const openvdb::FloatGrid>;
+
+        ConstAdapterT::tree(floatTree);
+        ConstAdapterT::tree(floatGrid);
+        ConstAdapterT::tree(constFloatTree);
+        ConstAdapterT::tree(constFloatGrid);
+        ConstAdapterT::constTree(floatTree);
+        ConstAdapterT::constTree(floatGrid);
+        ConstAdapterT::constTree(constFloatTree);
+        ConstAdapterT::constTree(constFloatGrid);
+    }
+
+    {
+        // test TreeAdapter<ValueAccessor<Tree>>
+
+        using AdapterT = openvdb::TreeAdapter<openvdb::tree::ValueAccessor<openvdb::FloatTree>>;
+
+        AdapterT::tree(floatTree);
+        AdapterT::tree(floatGrid);
+        AdapterT::tree(floatAcc);
+        AdapterT::tree(constFloatAcc);
+        AdapterT::tree(constFloatTree);
+        AdapterT::tree(constFloatGrid);
+        AdapterT::constTree(floatTree);
+        AdapterT::constTree(floatGrid);
+        AdapterT::constTree(floatAcc);
+        AdapterT::constTree(constFloatAcc);
+        AdapterT::constTree(constFloatTree);
+        AdapterT::constTree(constFloatGrid);
+
+        // test TreeAdapter<ValueAccessor<const Tree>>
+
+        using AdapterConstT = openvdb::TreeAdapter<openvdb::tree::ValueAccessor<const openvdb::FloatTree>>;
+
+        AdapterConstT::tree(floatTree);
+        AdapterConstT::tree(floatGrid);
+        AdapterConstT::tree(floatAcc);
+        AdapterConstT::tree(constFloatAcc);
+        AdapterConstT::tree(constFloatTree);
+        AdapterConstT::tree(constFloatGrid);
+        AdapterConstT::constTree(floatTree);
+        AdapterConstT::constTree(floatGrid);
+        AdapterConstT::constTree(floatAcc);
+        AdapterConstT::constTree(constFloatAcc);
+        AdapterConstT::constTree(constFloatTree);
+        AdapterConstT::constTree(constFloatGrid);
+    }
+}
+
+TEST_F(TestGrid, testPopulateHalfGridWithAccessor)
+{
+    using namespace openvdb;
+    HalfGrid::Ptr grid = HalfGrid::create();
+    HalfGrid::Accessor acc = grid->getAccessor();
+
+    Coord xyz(1000, -200000000, 30000000);
+    acc.setValue(xyz, Half(1.0));
+    EXPECT_EQ(Half(1.0), acc.getValue(xyz));
+
+    xyz.reset(1000, 200000000, -30000000);
+    acc.setValue(xyz, Half(2.0));
+    EXPECT_EQ(Half(2.0), acc.getValue(xyz));
+
+    acc.setValue(openvdb::Coord::min(), Half(3.0));
+    acc.setValue(openvdb::Coord::max(), Half(4.0));
+    EXPECT_EQ(Half(3.0), acc.getValue(openvdb::Coord::min()));
+    EXPECT_EQ(Half(4.0), acc.getValue(openvdb::Coord::max()));
+
+    for (HalfGrid::ValueOnCIter iter = grid->cbeginValueOn(); iter; ++iter) {
+        EXPECT_EQ(Half(iter.getValue()), *iter);
     }
 }

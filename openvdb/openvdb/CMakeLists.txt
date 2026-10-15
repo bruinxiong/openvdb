@@ -1,5 +1,5 @@
 # Copyright Contributors to the OpenVDB Project
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 #[=======================================================================[
 
@@ -7,10 +7,12 @@
 
 #]=======================================================================]
 
-cmake_minimum_required(VERSION 3.18)
+cmake_minimum_required(VERSION 3.24)
+
 project(OpenVDBCore LANGUAGES CXX)
 
 include(GNUInstallDirs)
+include(${CMAKE_SOURCE_DIR}/cmake/OpenVDBUtils.cmake)
 
 ###### OpenVDB Core Options
 
@@ -108,21 +110,6 @@ endif()
 
 # Collect and configure lib dependencies
 
-if(OPENVDB_USE_DELAYED_LOADING)
-  find_package(Boost ${MINIMUM_BOOST_VERSION} REQUIRED COMPONENTS iostreams)
-else()
-  find_package(Boost ${MINIMUM_BOOST_VERSION} REQUIRED COMPONENTS headers)
-endif()
-
-if(OPENVDB_FUTURE_DEPRECATION AND FUTURE_MINIMUM_BOOST_VERSION)
-  # The X.Y.Z boost version value isn't available until CMake 3.14
-  set(FULL_BOOST_VERSION "${Boost_MAJOR_VERSION}.${Boost_MINOR_VERSION}.${Boost_SUBMINOR_VERSION}")
-  if(${FULL_BOOST_VERSION} VERSION_LESS FUTURE_MINIMUM_BOOST_VERSION)
-    message(DEPRECATION "Support for Boost versions < ${FUTURE_MINIMUM_BOOST_VERSION} "
-      "is deprecated and will be removed.")
-  endif()
-endif()
-
 find_package(TBB ${MINIMUM_TBB_VERSION} REQUIRED COMPONENTS tbb)
 if(OPENVDB_FUTURE_DEPRECATION AND FUTURE_MINIMUM_TBB_VERSION)
   if(${TBB_VERSION} VERSION_LESS FUTURE_MINIMUM_TBB_VERSION)
@@ -137,6 +124,12 @@ if(USE_IMATH_HALF)
   message(STATUS "Found Imath: ${openvdb_imath_includes} (found suitable version \"${Imath_VERSION}\", "
     "minimum required is \"${MINIMUM_IMATH_VERSION}\")")
   unset(openvdb_imath_includes)
+  if(OPENVDB_FUTURE_DEPRECATION AND FUTURE_MINIMUM_IMATH_VERSION)
+    if(${Imath_VERSION} VERSION_LESS FUTURE_MINIMUM_IMATH_VERSION)
+      message(DEPRECATION "Support for Imath versions < ${FUTURE_MINIMUM_IMATH_VERSION} "
+        "is deprecated and will be removed.")
+    endif()
+  endif()
 endif()
 
 if(USE_LOG4CPLUS)
@@ -239,35 +232,21 @@ if(UNIX)
   list(APPEND OPENVDB_CORE_DEPENDENT_LIBS Threads::Threads)
 endif()
 
-# Pull in Boost last as houdini's boost (hboost) is fully namespaced and libs
-# are renamed too. Boost can be pulled in at any time, but do it last so that,
-# if it's in a shared place (like /usr/local) it doesn't accidently pull in
-# other headers.
-
-if(OPENVDB_USE_DELAYED_LOADING)
-  list(APPEND OPENVDB_CORE_DEPENDENT_LIBS Boost::iostreams)
-else()
-  list(APPEND OPENVDB_CORE_DEPENDENT_LIBS Boost::headers)
-endif()
-
-if(WIN32)
-  # Boost headers contain #pragma commands on Windows which causes Boost
-  # libraries to be linked in automatically. Custom boost installations
-  # may find that these naming conventions don't always match and can
-  # cause linker errors. This option disables this feature of Boost. Note
-  # -DBOOST_ALL_NO_LIB can also be provided manually.
-  if(OPENVDB_DISABLE_BOOST_IMPLICIT_LINKING)
-      list(APPEND OPENVDB_CORE_DEPENDENT_LIBS
-        Boost::disable_autolinking  # add -DBOOST_ALL_NO_LIB
-      )
-  endif()
-endif()
-
 ##########################################################################
 
 ##### Core library configuration
 
 # Configure the version header
+
+if(USE_VCL)
+  set(OPENVDB_USE_VCL 1)
+  if(NOT OPENVDB_X86_INSTRSET)
+    # If VCL is in use, determine which instruction set it's detected and embed
+    # this value into version.h.in. If downstream software ends up computing a
+    # different value, we can issue a warning.
+    openvdb_compute_x86_instrset_from_vcl(OPENVDB_X86_INSTRSET)
+  endif()
+endif()
 
 if(USE_IMATH_HALF)
   set(OPENVDB_USE_IMATH_HALF 1)
@@ -321,6 +300,7 @@ if(USE_EXPLICIT_INSTANTIATION)
 
   set(OPENVDB_LIBRARY_INSTANTIATION_ALL_TREES
     MaskTree
+    HalfTree
     points::PointDataTree
     ${OPENVDB_LIBRARY_INSTANTIATION_VOLUME_TREES}
   )
@@ -353,14 +333,12 @@ configure_file(version.h.in openvdb/version.h)
 set(OPENVDB_LIBRARY_SOURCE_FILES
   Grid.cc
   io/Archive.cc
+  io/Codec.cc
   io/Compression.cc
-  io/DelayedLoadMetadata.cc
   io/File.cc
   io/GridDescriptor.cc
   io/Queue.cc
   io/Stream.cc
-  io/TempFile.cc
-  math/Half.cc
   math/Maps.cc
   math/Proximity.cc
   math/QuantizedUnitVec.cc
@@ -391,16 +369,28 @@ set(OPENVDB_LIBRARY_INCLUDE_FILES
   TypeList.h
 )
 
+set(OPENVDB_LIBRARY_CODECS_INCLUDE_FILES
+  codecs/BoolCodec.h
+  codecs/PointDataCodec.h
+  codecs/PointIndexCodec.h
+  codecs/ScalarCodec.h
+  codecs/TopologyCodec.h
+  codecs/ValueMaskCodec.h
+)
+
+set(OPENVDB_LIBRARY_CODECS_IMPL_INCLUDE_FILES
+  codecs/impl/ScalarLeafCodec.h
+)
+
 set(OPENVDB_LIBRARY_IO_INCLUDE_FILES
   io/Archive.h
+  io/Codec.h
   io/Compression.h
-  io/DelayedLoadMetadata.h
   io/File.h
   io/GridDescriptor.h
   io/io.h
   io/Queue.h
   io/Stream.h
-  io/TempFile.h
 )
 
 set(OPENVDB_LIBRARY_MATH_INCLUDE_FILES
@@ -409,8 +399,7 @@ set(OPENVDB_LIBRARY_MATH_INCLUDE_FILES
   math/Coord.h
   math/DDA.h
   math/FiniteDifference.h
-  math/Half.h
-  math/LegacyFrustum.h
+  math/HalfDecl.h
   math/Maps.h
   math/Mat.h
   math/Mat3.h
@@ -442,6 +431,7 @@ set(OPENVDB_LIBRARY_POINTS_INCLUDE_FILES
   points/PointConversion.h
   points/PointCount.h
   points/PointDataGrid.h
+  points/PointDataIO.h
   points/PointDelete.h
   points/PointGroup.h
   points/PointMask.h
@@ -449,10 +439,12 @@ set(OPENVDB_LIBRARY_POINTS_INCLUDE_FILES
   points/PointRasterizeFrustum.h
   points/PointRasterizeSDF.h
   points/PointRasterizeTrilinear.h
+  points/PointReplicate.h
   points/PointSample.h
   points/PointScatter.h
   points/PointStatistics.h
   points/PointTransfer.h
+  points/PrincipalComponentAnalysis.h
   points/StreamCompression.h
 )
 
@@ -464,6 +456,7 @@ set(OPENVDB_LIBRARY_POINTS_IMPL_INCLUDE_FILES
   points/impl/PointGroupImpl.h
   points/impl/PointMaskImpl.h
   points/impl/PointMoveImpl.h
+  points/impl/PointRasterizeEllipsoidsSDFImpl.h
   points/impl/PointRasterizeFrustumImpl.h
   points/impl/PointRasterizeSDFImpl.h
   points/impl/PointRasterizeTrilinearImpl.h
@@ -471,6 +464,7 @@ set(OPENVDB_LIBRARY_POINTS_IMPL_INCLUDE_FILES
   points/impl/PointSampleImpl.h
   points/impl/PointScatterImpl.h
   points/impl/PointStatisticsImpl.h
+  points/impl/PrincipalComponentAnalysisImpl.h
 )
 
 set(OPENVDB_LIBRARY_TOOLS_INCLUDE_FILES
@@ -489,6 +483,7 @@ set(OPENVDB_LIBRARY_TOOLS_INCLUDE_FILES
   tools/GridTransformer.h
   tools/Interpolation.h
   tools/LevelSetAdvect.h
+  tools/LevelSetDilatedMesh.h
   tools/LevelSetFilter.h
   tools/LevelSetFracture.h
   tools/LevelSetMeasure.h
@@ -497,6 +492,7 @@ set(OPENVDB_LIBRARY_TOOLS_INCLUDE_FILES
   tools/LevelSetRebuild.h
   tools/LevelSetSphere.h
   tools/LevelSetTracker.h
+  tools/LevelSetTubes.h
   tools/LevelSetUtil.h
   tools/Mask.h
   tools/Merge.h
@@ -525,6 +521,12 @@ set(OPENVDB_LIBRARY_TOOLS_INCLUDE_FILES
   tools/VolumeAdvect.h
   tools/VolumeToMesh.h
   tools/VolumeToSpheres.h
+)
+
+set(OPENVDB_LIBRARY_TOOLS_IMPL_INCLUDE_FILES
+  tools/impl/ConvexVoxelizer.h
+  tools/impl/LevelSetDilatedMeshImpl.h
+  tools/impl/LevelSetTubesImpl.h
 )
 
 set(OPENVDB_LIBRARY_TREE_INCLUDE_FILES
@@ -561,6 +563,15 @@ set(OPENVDB_LIBRARY_THREAD_INCLUDE_FILES
   thread/Threading.h
 )
 
+set(OPENVDB_LIBRARY_SIMD_INCLUDE_FILES
+  simd/Simd.h
+)
+
+list(APPEND OPENVDB_LIBRARY_MATH_INCLUDE_FILES
+  ${CMAKE_SOURCE_DIR}/ext/imath/openvdb/math/Half.h)
+list(APPEND OPENVDB_LIBRARY_SOURCE_FILES
+  ${CMAKE_SOURCE_DIR}/ext/imath/openvdb/math/Half.cc)
+
 ##########################################################################
 
 # Configure auto-generation of explicit template definition translation units
@@ -571,6 +582,8 @@ if(USE_EXPLICIT_INSTANTIATION)
   # inexpensive to generate in this case.
   set(OPENVDB_LIBRARY_INSTANTIATION_HEADERS
     ${OPENVDB_LIBRARY_TOOLS_INCLUDE_FILES}
+    ${OPENVDB_LIBRARY_CODECS_INCLUDE_FILES}
+    ${OPENVDB_LIBRARY_CODECS_IMPL_INCLUDE_FILES}
   )
 
   # A new source file is generated by CMake for every header
@@ -645,9 +658,6 @@ endif()
 if(USE_LOG4CPLUS)
   list(APPEND OPENVDB_CORE_PUBLIC_DEFINES -DOPENVDB_USE_LOG4CPLUS)
 endif()
-if(OPENVDB_USE_DELAYED_LOADING)
-  list(APPEND OPENVDB_CORE_PUBLIC_DEFINES -DOPENVDB_USE_DELAYED_LOADING)
-endif()
 
 ##########################################################################
 
@@ -658,6 +668,14 @@ if(OPENVDB_CORE_STATIC)
     PUBLIC ../ ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_BINARY_DIR}/openvdb
     PRIVATE .
   )
+
+  if(NOT USE_IMATH_HALF)
+    target_include_directories(openvdb_static SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/ext/imath)
+  endif()
+
+  if(USE_VCL)
+    target_include_directories(openvdb_static SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/ext/vcl)
+  endif()
 
   target_compile_definitions(openvdb_static
     PUBLIC ${OPENVDB_CORE_PUBLIC_DEFINES} -DOPENVDB_STATICLIB
@@ -692,6 +710,14 @@ if(OPENVDB_CORE_SHARED)
     PRIVATE .
   )
 
+  if(NOT USE_IMATH_HALF)
+    target_include_directories(openvdb_shared SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/ext/imath)
+  endif()
+
+  if(USE_VCL)
+    target_include_directories(openvdb_shared SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/ext/vcl)
+  endif()
+
   target_compile_definitions(openvdb_shared
     PUBLIC ${OPENVDB_CORE_PUBLIC_DEFINES} -DOPENVDB_DLL
     PRIVATE ${OPENVDB_CORE_PRIVATE_DEFINES}
@@ -725,27 +751,35 @@ endif()
 
 if(OPENVDB_CORE_STATIC)
   install(TARGETS openvdb_static
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${OPENVDB_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${OPENVDB_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${OPENVDB_INSTALL_LIBDIR}
   )
 endif()
 
 if(OPENVDB_CORE_SHARED)
   install(TARGETS openvdb_shared
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${OPENVDB_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${OPENVDB_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${OPENVDB_INSTALL_LIBDIR}
   )
 endif()
 
-install(FILES ${OPENVDB_LIBRARY_INCLUDE_FILES} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/openvdb)
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/openvdb/version.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/openvdb)
-install(FILES ${OPENVDB_LIBRARY_IO_INCLUDE_FILES} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/openvdb/io)
-install(FILES ${OPENVDB_LIBRARY_MATH_INCLUDE_FILES} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/openvdb/math)
-install(FILES ${OPENVDB_LIBRARY_POINTS_INCLUDE_FILES} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/openvdb/points)
-install(FILES ${OPENVDB_LIBRARY_POINTS_IMPL_INCLUDE_FILES} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/openvdb/points/impl)
-install(FILES ${OPENVDB_LIBRARY_TOOLS_INCLUDE_FILES} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/openvdb/tools)
-install(FILES ${OPENVDB_LIBRARY_TREE_INCLUDE_FILES} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/openvdb/tree)
-install(FILES ${OPENVDB_LIBRARY_UTIL_INCLUDE_FILES} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/openvdb/util)
-install(FILES ${OPENVDB_LIBRARY_THREAD_INCLUDE_FILES} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/openvdb/thread)
+install(FILES ${OPENVDB_LIBRARY_INCLUDE_FILES} DESTINATION ${OPENVDB_INSTALL_INCLUDEDIR}/openvdb)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/openvdb/version.h DESTINATION ${OPENVDB_INSTALL_INCLUDEDIR}/openvdb)
+install(FILES ${OPENVDB_LIBRARY_IO_INCLUDE_FILES} DESTINATION ${OPENVDB_INSTALL_INCLUDEDIR}/openvdb/io)
+install(FILES ${OPENVDB_LIBRARY_CODECS_INCLUDE_FILES} DESTINATION ${OPENVDB_INSTALL_INCLUDEDIR}/openvdb/codecs)
+install(FILES ${OPENVDB_LIBRARY_CODECS_IMPL_INCLUDE_FILES} DESTINATION ${OPENVDB_INSTALL_INCLUDEDIR}/openvdb/codecs/impl)
+install(FILES ${OPENVDB_LIBRARY_MATH_INCLUDE_FILES} DESTINATION ${OPENVDB_INSTALL_INCLUDEDIR}/openvdb/math)
+install(FILES ${OPENVDB_LIBRARY_POINTS_INCLUDE_FILES} DESTINATION ${OPENVDB_INSTALL_INCLUDEDIR}/openvdb/points)
+install(FILES ${OPENVDB_LIBRARY_POINTS_IMPL_INCLUDE_FILES} DESTINATION ${OPENVDB_INSTALL_INCLUDEDIR}/openvdb/points/impl)
+install(FILES ${OPENVDB_LIBRARY_TOOLS_INCLUDE_FILES} DESTINATION ${OPENVDB_INSTALL_INCLUDEDIR}/openvdb/tools)
+install(FILES ${OPENVDB_LIBRARY_TOOLS_IMPL_INCLUDE_FILES} DESTINATION ${OPENVDB_INSTALL_INCLUDEDIR}/openvdb/tools/impl)
+install(FILES ${OPENVDB_LIBRARY_TREE_INCLUDE_FILES} DESTINATION ${OPENVDB_INSTALL_INCLUDEDIR}/openvdb/tree)
+install(FILES ${OPENVDB_LIBRARY_UTIL_INCLUDE_FILES} DESTINATION ${OPENVDB_INSTALL_INCLUDEDIR}/openvdb/util)
+install(FILES ${OPENVDB_LIBRARY_THREAD_INCLUDE_FILES} DESTINATION ${OPENVDB_INSTALL_INCLUDEDIR}/openvdb/thread)
+install(FILES ${OPENVDB_LIBRARY_SIMD_INCLUDE_FILES} DESTINATION ${OPENVDB_INSTALL_INCLUDEDIR}/openvdb/simd)
+
+if(USE_VCL)
+  install(DIRECTORY ${CMAKE_SOURCE_DIR}/ext/vcl/openvdb DESTINATION ${OPENVDB_INSTALL_INCLUDEDIR})
+endif()

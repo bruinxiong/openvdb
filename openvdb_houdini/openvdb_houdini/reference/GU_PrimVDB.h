@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /*
  * Copyright (c) Side Effects Software Inc.
@@ -150,6 +150,13 @@ public:
     {
         return GU_PrimVDB::buildFromGridAdapter(gdp, &grid, src, name);
     }
+
+    // Builds a vdb directly from an IMX_VDB
+    static GEO_PrimVDB       *buildFromVDB(GU_Detail *gdp,
+                                    UT_SharedPtr<IMX_VDB> vdb);
+    static GEO_PrimVDB       *buildFromVDB(GU_Detail *gdp,
+                                    UT_SharedPtr<const IMX_VDB> vdb);
+
 
     /// Create new VDB primitive from the given native volume primitive
     static GU_PrimVDB * buildFromPrimVolume(

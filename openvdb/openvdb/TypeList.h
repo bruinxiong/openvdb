@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /// @file TypeList.h
 ///
@@ -554,8 +554,6 @@ RetT TSEvalFirstPredImpl(
 
 /// @endcond
 
-
-/// @brief
 template<size_t Start, size_t End, typename OpT>
 OPENVDB_TYPELIST_FORCE_INLINE auto foreachIndex(OpT op)
 {
@@ -884,9 +882,9 @@ struct TupleList
 
     /// @brief  Run a function on the first element in the underlying
     ///   std::tuple that satisfies the provided predicate. Effectively
-    ///   calls op(std::get<I>(mTuple)) when pred(I) returns true, then exits,
-    ///   where I = [0,Size). Does not support returning a value.
-    /// @note  This is mainly useful to avoid the overhead of calling std::get<I>
+    ///   calls `op(std::get<I>(mTuple))` when `pred(I)` returns true, then exits,
+    ///   where `I = [0,Size)`. Does not support returning a value.
+    /// @note  This is mainly useful to avoid the overhead of calling `std::get<I>`
     ///   on every element when only a single unknown element needs processing.
     ///
     /// @param pred  Predicate to run on each index, should return true/false
@@ -915,8 +913,8 @@ struct TupleList
 
     /// @brief  Run a function on the first element in the underlying
     ///   std::tuple that satisfies the provided predicate. Effectively
-    ///   calls op(std::get<I>(mTuple)) when pred(I) returns true, then exits,
-    ///   where I = [0,Size). Supports returning a value, but a default return
+    ///   calls `op(std::get<I>(mTuple))` when `pred(I)` returns true, then exits,
+    ///   where `I = [0,Size)`. Supports returning a value, but a default return
     ///   value must be provided.
     ///
     /// @param pred  Predicate to run on each index, should return true/false

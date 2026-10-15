@@ -1,11 +1,13 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 #include <openvdb/openvdb.h>
 #include <openvdb/Types.h>
 #include <openvdb/tools/Filter.h>
+#include <openvdb/tools/Prune.h>
 #include <openvdb/tree/LeafNode.h>
 #include <openvdb/util/logging.h>
+#include <openvdb/io/io.h>
 #include "util.h" // for unittest_util::makeSphere()
 #include <gtest/gtest.h>
 #include <set>
@@ -290,6 +292,62 @@ TEST_F(TestLeafMask, testIO)
     leaf.setValueOn(openvdb::Coord(0, 1, 0));
     leaf.setValueOn(openvdb::Coord(1, 0, 0));
 
+    // read and write topology to disk
+
+    {
+        // create a grid with the leaf for topology testing
+        typedef openvdb::Grid<openvdb::tree::Tree<openvdb::tree::RootNode<
+            openvdb::tree::InternalNode<openvdb::tree::InternalNode<LeafType, 4>, 5>>>> MaskGrid;
+        MaskGrid::Ptr grid = MaskGrid::create();
+        grid->setName("leaf_mask");
+        grid->tree().addLeaf(new LeafType(leaf));
+
+        openvdb::GridCPtrVec grids;
+        grids.push_back(grid);
+
+        // write to file
+        {
+            openvdb::io::File file("leaf_mask.vdb");
+            file.write(grids);
+            file.close();
+        }
+
+        // read grid from file
+        MaskGrid::Ptr gridFromDisk;
+        {
+            openvdb::io::File file("leaf_mask.vdb");
+            file.open();
+            openvdb::GridBase::Ptr baseGrid = file.readGrid("leaf_mask");
+            file.close();
+
+            gridFromDisk = openvdb::gridPtrCast<MaskGrid>(baseGrid);
+        }
+
+        LeafType* leaf2 = gridFromDisk->tree().probeLeaf(origin);
+        EXPECT_TRUE(leaf2);
+
+        // check topology and values match
+
+        EXPECT_EQ(origin, leaf2->origin());
+        EXPECT_TRUE(leaf2->isValueOn(openvdb::Coord(0, 1, 0)));
+        EXPECT_TRUE(leaf2->isValueOn(openvdb::Coord(1, 0, 0)));
+        EXPECT_TRUE(leaf2->onVoxelCount() == 2);
+
+        remove("leaf_mask.vdb");
+    }
+}
+
+
+#if OPENVDB_ABI_VERSION_NUMBER < 14
+
+TEST_F(TestLeafMask, testTreeIO)
+{
+    LeafType leaf(openvdb::Coord(1, 3, 5));
+    const openvdb::Coord origin = leaf.origin();
+
+    leaf.setValueOn(openvdb::Coord(0, 1, 0));
+    leaf.setValueOn(openvdb::Coord(1, 0, 0));
+
     std::ostringstream ostr(std::ios_base::binary);
 
     leaf.writeBuffers(ostr);
@@ -298,8 +356,6 @@ TEST_F(TestLeafMask, testIO)
     leaf.setValueOn(openvdb::Coord(0, 1, 1));
 
     std::istringstream istr(ostr.str(), std::ios_base::binary);
-    // Since the input stream doesn't include a VDB header with file format version info,
-    // tag the input stream explicitly with the current version number.
     openvdb::io::setCurrentVersion(istr);
 
     leaf.readBuffers(istr);
@@ -311,6 +367,8 @@ TEST_F(TestLeafMask, testIO)
 
     EXPECT_TRUE(leaf.onVoxelCount() == 2);
 }
+
+#endif // OPENVDB_ABI_VERSION_NUMBER < 14
 
 
 TEST_F(TestLeafMask, testTopologyCopy)
@@ -573,4 +631,56 @@ TEST_F(TestLeafMask, testTransientData)
     EXPECT_EQ(openvdb::Index32(5), leaf2.transientData());
     LeafType leaf3 = leaf;
     EXPECT_EQ(openvdb::Index32(5), leaf3.transientData());
+}
+
+TEST_F(TestLeafMask, testUnsafe)
+{
+    using namespace openvdb;
+    using LeafT = tree::LeafNode<ValueMask, 3>;
+    const Coord origin(-9, -2, -8);
+    LeafT leaf(origin, false, /*dummy=*/false);
+
+    EXPECT_FALSE(leaf.isValueOn(1));
+    EXPECT_TRUE(leaf.isValueOff(1));
+    EXPECT_EQ(leaf.getValueUnsafe(1), false);
+    bool value = true;
+    EXPECT_FALSE(leaf.getValueUnsafe(1, value));
+    EXPECT_EQ(value, false);
+
+    EXPECT_TRUE(leaf.isValueOff(32));
+    leaf.setValueOnUnsafe(32);
+    EXPECT_TRUE(leaf.isValueOn(32));
+    leaf.setValueOffUnsafe(32);
+    EXPECT_TRUE(leaf.isValueOff(32));
+    leaf.setActiveStateUnsafe(32, true);
+    EXPECT_TRUE(leaf.isValueOn(32));
+    leaf.setActiveStateUnsafe(32, false);
+    EXPECT_TRUE(leaf.isValueOff(32));
+
+    leaf.setValueOnlyUnsafe(32, true);
+    EXPECT_EQ(leaf.getValueUnsafe(32), true);
+    EXPECT_TRUE(leaf.isValueOn(32));
+    leaf.setValueOffUnsafe(32);
+    EXPECT_TRUE(leaf.isValueOff(32));
+
+    leaf.setValueOnUnsafe(33, true);
+    EXPECT_TRUE(leaf.isValueOn(33));
+    EXPECT_EQ(leaf.getValueUnsafe(33), true);
+    leaf.setValueOffUnsafe(33, false);
+    EXPECT_TRUE(leaf.isValueOff(33));
+    EXPECT_EQ(leaf.getValueUnsafe(33), false);
+}
+
+TEST_F(TestLeafMask, testIterator)
+{
+    using namespace openvdb;
+
+    auto mask = MaskGrid::create(false);
+    mask->tree().setValue(Coord(0, 1, 2), true);
+
+    mask->tree().beginValueOn().setValueOff();
+
+    tools::pruneInactive(mask->tree());
+
+    EXPECT_TRUE(mask->tree().empty());
 }

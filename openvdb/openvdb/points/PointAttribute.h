@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /// @author Dan Bailey, Khang Ngo
 ///
@@ -24,6 +24,8 @@ OPENVDB_USE_VERSION_NAMESPACE
 namespace OPENVDB_VERSION_NAME {
 namespace points {
 
+/// @cond OPENVDB_DOCS_INTERNAL
+
 namespace point_attribute_internal {
 
 template <typename ValueType>
@@ -34,6 +36,7 @@ struct Default
 
 } // namespace point_attribute_internal
 
+/// @endcond
 
 /// @brief Appends a new attribute to the VDB tree
 /// (this method does not require a templated AttributeType)

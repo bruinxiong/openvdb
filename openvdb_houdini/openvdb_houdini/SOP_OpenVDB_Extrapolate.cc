@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 //
 // @file SOP_OpenVDB_Extrapolate.cc
 //
@@ -123,7 +123,11 @@ public:
 
     static OP_Node* factory(OP_Network*, const char* name, OP_Operator*);
 
-    int isRefInput(unsigned input) const override { return (input == 1); }
+    int isRefInput(OP_InputIdx input) const override
+    {
+        UT_ASSERT(input >= 0);
+        return (input == 1);
+    }
 
     class Cache: public SOP_VDBCacheOptions
     {

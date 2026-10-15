@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 #include "RenderModules.h"
 
@@ -12,6 +12,18 @@
 #include <openvdb/tree/LeafManager.h>
 #include <openvdb/util/logging.h>
 #include <openvdb/util/Assert.h>
+
+#if defined(_WIN32)
+// GL/glu.h requires APIENTRY and CALLBACK from windows.h. GL/glew.h only defines
+// them temporarily (undefining them at the end of the header), so windows.h must
+// be included before GL/glu.h rather than relying on a transitive include.
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <GL/glu.h>
+#endif
+
 #include <algorithm> // for std::min()
 #include <cmath> // for std::abs(), std::fabs(), std::floor()
 #include <limits>

@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 #include "GridDescriptor.h"
 
@@ -69,9 +69,11 @@ GridDescriptor::writeStreamPos(std::ostream &os) const
     os.write(reinterpret_cast<const char*>(&mEndPos), sizeof(int64_t));
 }
 
-GridBase::Ptr
-GridDescriptor::read(std::istream &is)
+void
+GridDescriptor::readHeader(std::istream &is)
 {
+    checkFormatVersion(is);
+
     // Read in the name.
     mUniqueName = readString(is);
     mGridName = stripSuffix(mUniqueName);
@@ -83,24 +85,29 @@ GridDescriptor::read(std::istream &is)
         mGridType.resize(mGridType.size() - std::strlen(HALF_FLOAT_TYPENAME_SUFFIX));
     }
 
-    if (getFormatVersion(is) >= OPENVDB_FILE_VERSION_GRID_INSTANCING) {
-        mInstanceParentName = readString(is);
-    }
+    mInstanceParentName = readString(is);
+}
 
-    // Create the grid of the type if it has been registered.
+void
+GridDescriptor::readStreamPos(std::istream &is)
+{
+    is.read(reinterpret_cast<char*>(&mGridPos), sizeof(int64_t));
+    is.read(reinterpret_cast<char*>(&mBlockPos), sizeof(int64_t));
+    is.read(reinterpret_cast<char*>(&mEndPos), sizeof(int64_t));
+}
+
+GridBase::Ptr
+GridDescriptor::read(std::istream &is)
+{
+    readHeader(is);
+    readStreamPos(is);
+
     if (!GridBase::isRegistered(mGridType)) {
         OPENVDB_THROW(LookupError, "Cannot read grid." <<
             " Grid type " << mGridType << " is not registered.");
     }
-    // else
     GridBase::Ptr grid = GridBase::createGrid(mGridType);
     if (grid) grid->setSaveFloatAsHalf(mSaveFloatAsHalf);
-
-    // Read in the offsets.
-    is.read(reinterpret_cast<char*>(&mGridPos), sizeof(int64_t));
-    is.read(reinterpret_cast<char*>(&mBlockPos), sizeof(int64_t));
-    is.read(reinterpret_cast<char*>(&mEndPos), sizeof(int64_t));
-
     return grid;
 }
 

@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 //
 /// @file SOP_OpenVDB_Combine.cc
 ///
@@ -128,7 +128,6 @@ asResampleMode(exint i, ResampleMode defaultMode = RESAMPLE_B)
     return (i >= RESAMPLE_MODE_FIRST && i <= RESAMPLE_MODE_LAST)
         ? static_cast<ResampleMode>(i) : defaultMode;
 }
-
 
 //
 // Collation options

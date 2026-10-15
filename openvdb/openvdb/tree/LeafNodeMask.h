@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 #ifndef OPENVDB_TREE_LEAF_NODE_MASK_HAS_BEEN_INCLUDED
 #define OPENVDB_TREE_LEAF_NODE_MASK_HAS_BEEN_INCLUDED
@@ -112,11 +112,13 @@ public:
     /// Return the dimension of child nodes of this LeafNode, which is one for voxels.
     static Index getChildDim() { return 1; }
     /// Return the leaf count for this node, which is one.
-    static Index32 leafCount() { return 1; }
+    static Index64 leafCount() { return 1; }
     /// no-op
+    void nodeCount(std::vector<Index64> &) const {}
+    OPENVDB_DEPRECATED_MESSAGE("Use input type std::vector<Index64> for nodeCount.")
     void nodeCount(std::vector<Index32> &) const {}
     /// Return the non-leaf count for this node, which is zero.
-    static Index32 nonLeafCount() { return 0; }
+    static Index64 nonLeafCount() { return 0; }
 
     /// Return the number of active voxels.
     Index64 onVoxelCount() const { return mBuffer.mData.countOn(); }
@@ -142,7 +144,8 @@ public:
 
     /// Return the memory in bytes occupied by this node.
     Index64 memUsage() const;
-    Index64 memUsageIfLoaded() const;
+    OPENVDB_DEPRECATED_MESSAGE("Use memUsage() instead. This method is deprecated and will be removed. Delayed loading is no longer supported.")
+    Index64 memUsageIfLoaded() const { return memUsage(); }
 
     /// Expand the given bounding box so that it includes this leaf node's active voxels.
     /// If visitVoxels is false this LeafNode will be approximated as dense, i.e. with all
@@ -196,6 +199,7 @@ public:
     const Buffer& buffer() const { return mBuffer; }
     Buffer& buffer() { return mBuffer; }
 
+#if OPENVDB_ABI_VERSION_NUMBER < 14
     //
     // I/O methods
     //
@@ -209,6 +213,7 @@ public:
     void readBuffers(std::istream& is, const CoordBBox&, bool fromHalf = false);
     /// Write out the topology and the origin.
     void writeBuffers(std::ostream&, bool toHalf = false) const;
+#endif // OPENVDB_ABI_VERSION_NUMBER < 14
 
     //
     // Accessor methods
@@ -222,6 +227,10 @@ public:
     /// @param xyz       the coordinates of the voxel to be probed
     /// @param[out] val  the value of the voxel at the given coordinates
     bool probeValue(const Coord& xyz, bool& val) const;
+    /// @brief Return @c true if the voxel at the given offset is active.
+    /// @param offset    the linear offset of the voxel to be probed
+    /// @param[out] val  the value of the voxel at the given coordinates
+    bool probeValue(Index offset, bool& val) const;
 
     /// Return the level (0) at which leaf node values reside.
     static Index getValueLevel(const Coord&) { return LEVEL; }
@@ -277,9 +286,13 @@ public:
     void setValuesOff() { mBuffer.mData.setOff(); }
 
     /// Return @c true if the voxel at the given coordinates is active.
-    bool isValueOn(const Coord& xyz) const { return mBuffer.mData.isOn(this->coordToOffset(xyz)); }
+    bool isValueOn(const Coord& xyz) const { return this->isValueOn(this->coordToOffset(xyz)); }
     /// Return @c true if the voxel at the given offset is active.
     bool isValueOn(Index offset) const { OPENVDB_ASSERT(offset < SIZE); return mBuffer.mData.isOn(offset); }
+    /// Return @c true if the voxel at the given coordinates is inactive.
+    bool isValueOff(const Coord& xyz) const { return this->isValueOff(this->coordToOffset(xyz)); }
+    /// Return @c true if the voxel at the given offset is inactive.
+    bool isValueOff(Index offset) const { OPENVDB_ASSERT(offset < SIZE); return mBuffer.mData.isOff(offset); }
 
     /// Return @c false since leaf nodes never contain tiles.
     static bool hasActiveTiles() { return false; }
@@ -439,6 +452,29 @@ public:
 
     /// Return @c true if all of this node's values are inactive.
     bool isInactive() const { return mBuffer.mData.isOff(); }
+
+    //
+    // Unsafe methods
+    //
+    // These methods are not in fact unsafe, but are only offered so that
+    // the same methods can be called on both internal nodes and leaf nodes.
+
+    /// Return the value of the voxel at the given offset.
+    const bool& getValueUnsafe(Index offset) const { return this->getValue(offset); }
+    /// Return true if the voxel at the given offset is active and set value.
+    bool getValueUnsafe(Index offset, bool& value) const { return this->probeValue(offset, value); }
+    /// Set the active state of the voxel at the given offset but don't change its value.
+    void setActiveStateUnsafe(Index offset, bool on) { this->setActiveState(offset, on); }
+    /// Set the value of the voxel at the given coordinates but don't change its active state.
+    void setValueOnlyUnsafe(Index offset, const bool& value) { return this->setValueOnly(offset, value); }
+    /// Mark the voxel at the given offset as active but don't change its value.
+    void setValueOnUnsafe(Index offset) { this->setValueOn(offset); }
+    /// Set the value of the voxel at the given coordinates and mark the voxel as active.
+    void setValueOnUnsafe(Index offset, const bool& value) { this->setValueOn(offset, value); }
+    /// Mark the voxel at the given offset as inactive but don't change its value.
+    void setValueOffUnsafe(Index offset) { this->setValueOff(offset); }
+    /// Set the value of the voxel at the given coordinates and mark the voxel as active.
+    void setValueOffUnsafe(Index offset, const bool& value) { this->setValueOff(offset, value); }
 
     /// @brief no-op since for this template specialization voxel
     /// values and states are indistinguishable.
@@ -741,6 +777,7 @@ private:
 
 ////////////////////////////////////////
 
+/// @cond OPENVDB_DOCS_INTERNAL
 
 template<Index Log2Dim>
 inline
@@ -851,15 +888,6 @@ LeafNode<ValueMask, Log2Dim>::memUsage() const
 
 
 template<Index Log2Dim>
-inline Index64
-LeafNode<ValueMask, Log2Dim>::memUsageIfLoaded() const
-{
-    // Use sizeof(*this) to capture alignment-related padding
-    return sizeof(*this);
-}
-
-
-template<Index Log2Dim>
 inline void
 LeafNode<ValueMask, Log2Dim>::evalActiveBoundingBox(CoordBBox& bbox, bool visitVoxels) const
 {
@@ -936,6 +964,8 @@ LeafNode<ValueMask, Log2Dim>::offsetToGlobalCoord(Index n) const
 ////////////////////////////////////////
 
 
+#if OPENVDB_ABI_VERSION_NUMBER < 14
+
 template<Index Log2Dim>
 inline void
 LeafNode<ValueMask, Log2Dim>::readTopology(std::istream& is, bool /*fromHalf*/)
@@ -990,6 +1020,8 @@ LeafNode<ValueMask, Log2Dim>::writeBuffers(std::ostream& os, bool /*toHalf*/) co
     // Write out the origin.
     os.write(reinterpret_cast<const char*>(&mOrigin), sizeof(Coord::ValueType) * 3);
 }
+
+#endif // OPENVDB_ABI_VERSION_NUMBER < 14
 
 
 ////////////////////////////////////////
@@ -1109,7 +1141,14 @@ template<Index Log2Dim>
 inline bool
 LeafNode<ValueMask, Log2Dim>::probeValue(const Coord& xyz, bool& val) const
 {
-    const Index offset = this->coordToOffset(xyz);
+    return this->probeValue(this->coordToOffset(xyz), val);
+}
+
+
+template<Index Log2Dim>
+inline bool
+LeafNode<ValueMask, Log2Dim>::probeValue(Index offset, bool& val) const
+{
     val = mBuffer.mData.isOn(offset);
     return val;
 }
@@ -1482,6 +1521,7 @@ LeafNode<ValueMask, Log2Dim>::combine2(const LeafNode& b0, const OtherNodeT& b1,
     }
 }
 
+/// @endcond
 
 } // namespace tree
 } // namespace OPENVDB_VERSION_NAME

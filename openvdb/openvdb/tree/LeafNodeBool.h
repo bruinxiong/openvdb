@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 #ifndef OPENVDB_TREE_LEAF_NODE_BOOL_HAS_BEEN_INCLUDED
 #define OPENVDB_TREE_LEAF_NODE_BOOL_HAS_BEEN_INCLUDED
@@ -80,23 +80,6 @@ public:
     template<typename OtherValueType>
     explicit LeafNode(const LeafNode<OtherValueType, Log2Dim>& other);
 
-    /// @brief Deprecated topology copy constructor
-    /// @note  This constructor initialises the bool buffer to the ValueMask
-    ///   states (i.e. value will be true if the active state is on and
-    ///   vice-versa). This is not really a "TopologyCopy" and is therefor
-    ///   deprecated. Use the explicit mask/buffer constructor instead:
-    /// @code
-    ///    // build new leaf node with the mask of 'a', but with the mask of
-    ///    // 'b' as the the new value buffer.
-    ///    const LeafNode a = ... ;
-    ///    const LeafNode b = ... ;
-    ///    const LeafNode copy(a.origin(), /*mask=*/a.getValueMask(),
-    ///      /*buff=*/b.getValueMask());
-    /// @endcode
-    template<typename ValueType>
-    OPENVDB_DEPRECATED_MESSAGE("Use LeafNodeBool component constructor.")
-    LeafNode(const LeafNode<ValueType, Log2Dim>& other, TopologyCopy);
-
     /// @brief Construct a LeafNodeBool with its individual components
     /// @param xyz  Leaf origin
     /// @param mask  The ValueMask to copy
@@ -131,10 +114,12 @@ public:
     static void getNodeLog2Dims(std::vector<Index>& dims) { dims.push_back(Log2Dim); }
     static Index getChildDim() { return 1; }
 
-    static Index32 leafCount() { return 1; }
+    static Index64 leafCount() { return 1; }
     /// no-op
+    void nodeCount(std::vector<Index64> &) const {}
+    OPENVDB_DEPRECATED_MESSAGE("Use input type std::vector<Index64> for nodeCount.")
     void nodeCount(std::vector<Index32> &) const {}
-    static Index32 nonLeafCount() { return 0; }
+    static Index64 nonLeafCount() { return 0; }
 
     /// Return the number of active voxels.
     Index64 onVoxelCount() const { return mValueMask.countOn(); }
@@ -160,7 +145,8 @@ public:
 
     /// Return the memory in bytes occupied by this node.
     Index64 memUsage() const;
-    Index64 memUsageIfLoaded() const;
+    OPENVDB_DEPRECATED_MESSAGE("Use memUsage() instead. This method is deprecated and will be removed. Delayed loading is no longer supported.")
+    Index64 memUsageIfLoaded() const { return memUsage(); }
 
     /// Expand the given bounding box so that it includes this leaf node's active voxels.
     /// If visitVoxels is false this LeafNode will be approximated as dense, i.e. with all
@@ -214,6 +200,7 @@ public:
     const Buffer& buffer() const { return mBuffer; }
     Buffer& buffer() { return mBuffer; }
 
+#if OPENVDB_ABI_VERSION_NUMBER < 14
     //
     // I/O methods
     //
@@ -227,6 +214,7 @@ public:
     void readBuffers(std::istream& is, const CoordBBox&, bool fromHalf = false);
     /// Write out the topology and the origin.
     void writeBuffers(std::ostream&, bool toHalf = false) const;
+#endif // OPENVDB_ABI_VERSION_NUMBER < 14
 
     //
     // Accessor methods
@@ -240,6 +228,10 @@ public:
     /// @param xyz       the coordinates of the voxel to be probed
     /// @param[out] val  the value of the voxel at the given coordinates
     bool probeValue(const Coord& xyz, bool& val) const;
+    /// @brief Return @c true if the voxel at the given offset is active.
+    /// @param offset    the linear offset of the voxel to be probed
+    /// @param[out] val  the value of the voxel at the given coordinates
+    bool probeValue(Index offset, bool& val) const;
 
     /// Return the level (0) at which leaf node values reside.
     static Index getValueLevel(const Coord&) { return LEVEL; }
@@ -295,9 +287,13 @@ public:
     void setValuesOff() { mValueMask.setOff(); }
 
     /// Return @c true if the voxel at the given coordinates is active.
-    bool isValueOn(const Coord& xyz) const { return mValueMask.isOn(this->coordToOffset(xyz)); }
+    bool isValueOn(const Coord& xyz) const { return this->isValueOn(this->coordToOffset(xyz)); }
     /// Return @c true if the voxel at the given offset is active.
     bool isValueOn(Index offset) const { OPENVDB_ASSERT(offset < SIZE); return mValueMask.isOn(offset); }
+    /// Return @c true if the voxel at the given coordinates is inactive.
+    bool isValueOff(const Coord& xyz) const { return this->isValueOff(this->coordToOffset(xyz)); }
+    /// Return @c true if the voxel at the given offset is inactive.
+    bool isValueOff(Index offset) const { OPENVDB_ASSERT(offset < SIZE); return mValueMask.isOff(offset); }
 
     /// Return @c false since leaf nodes never contain tiles.
     static bool hasActiveTiles() { return false; }
@@ -426,7 +422,7 @@ public:
     /// it should not be converted to a non-const pointer!
     const bool& getLastValue() const { if (mValueMask.isOn(SIZE-1)) return Buffer::sOn; else return Buffer::sOff; }
 
-    /// Return @c true if all of this node's voxels have the same active state
+    /// @brief Return @c true if all of this node's voxels have the same active state
     /// and are equal to within the given tolerance, and return the value in
     /// @a constValue and the active state in @a state.
     bool isConstant(bool& constValue, bool& state, bool tolerance = 0) const;
@@ -456,6 +452,29 @@ public:
 
     /// Return @c true if all of this node's values are inactive.
     bool isInactive() const { return mValueMask.isOff(); }
+
+    //
+    // Unsafe methods
+    //
+    // These methods are not in fact unsafe, but are only offered so that
+    // the same methods can be called on both internal nodes and leaf nodes.
+
+    /// Return the value of the voxel at the given offset.
+    const bool& getValueUnsafe(Index offset) const { return this->getValue(offset); }
+    /// Return true if the voxel at the given offset is active and set value.
+    bool getValueUnsafe(Index offset, bool& value) const { return this->probeValue(offset, value); }
+    /// Set the active state of the voxel at the given offset but don't change its value.
+    void setActiveStateUnsafe(Index offset, bool on) { this->setActiveState(offset, on); }
+    /// Set the value of the voxel at the given coordinates but don't change its active state.
+    void setValueOnlyUnsafe(Index offset, const bool& value) { return this->setValueOnly(offset, value); }
+    /// Mark the voxel at the given offset as active but don't change its value.
+    void setValueOnUnsafe(Index offset) { this->setValueOn(offset); }
+    /// Set the value of the voxel at the given coordinates and mark the voxel as active.
+    void setValueOnUnsafe(Index offset, const bool& value) { this->setValueOn(offset, value); }
+    /// Mark the voxel at the given offset as inactive but don't change its value.
+    void setValueOffUnsafe(Index offset) { this->setValueOff(offset); }
+    /// Set the value of the voxel at the given coordinates and mark the voxel as active.
+    void setValueOffUnsafe(Index offset, const bool& value) { this->setValueOff(offset, value); }
 
     void resetBackground(bool oldBackground, bool newBackground);
 
@@ -755,6 +774,7 @@ private:
 
 ////////////////////////////////////////
 
+/// @cond OPENVDB_DOCS_INTERNAL
 
 template<Index Log2Dim>
 inline
@@ -832,17 +852,6 @@ LeafNode<bool, Log2Dim>::LeafNode(const LeafNode<ValueT, Log2Dim>& other,
 
 
 template<Index Log2Dim>
-template<typename ValueT>
-inline
-LeafNode<bool, Log2Dim>::LeafNode(const LeafNode<ValueT, Log2Dim>& other, TopologyCopy)
-    : mValueMask(other.valueMask())
-    , mBuffer(other.valueMask())// value = active state
-    , mOrigin(other.origin())
-    , mTransientData(other.mTransientData)
-{
-}
-
-template<Index Log2Dim>
 inline
 LeafNode<bool, Log2Dim>::LeafNode(const Coord& xyz,
     const NodeMaskType& mask,
@@ -886,15 +895,6 @@ LeafNode<bool, Log2Dim>::~LeafNode()
 template<Index Log2Dim>
 inline Index64
 LeafNode<bool, Log2Dim>::memUsage() const
-{
-    // Use sizeof(*this) to capture alignment-related padding
-    return sizeof(*this);
-}
-
-
-template<Index Log2Dim>
-inline Index64
-LeafNode<bool, Log2Dim>::memUsageIfLoaded() const
 {
     // Use sizeof(*this) to capture alignment-related padding
     return sizeof(*this);
@@ -978,6 +978,8 @@ LeafNode<bool, Log2Dim>::offsetToGlobalCoord(Index n) const
 ////////////////////////////////////////
 
 
+#if OPENVDB_ABI_VERSION_NUMBER < 14
+
 template<Index Log2Dim>
 inline void
 LeafNode<bool, Log2Dim>::readTopology(std::istream& is, bool /*fromHalf*/)
@@ -1016,40 +1018,15 @@ template<Index Log2Dim>
 inline void
 LeafNode<bool, Log2Dim>::readBuffers(std::istream& is, bool /*fromHalf*/)
 {
+    io::checkFormatVersion(is);
+
     // Read in the value mask.
     mValueMask.load(is);
     // Read in the origin.
     is.read(reinterpret_cast<char*>(&mOrigin), sizeof(Coord::ValueType) * 3);
 
-    if (io::getFormatVersion(is) >= OPENVDB_FILE_VERSION_BOOL_LEAF_OPTIMIZATION) {
-        // Read in the mask for the voxel values.
-        mBuffer.mData.load(is);
-    } else {
-        // Older files stored one or more bool arrays.
-
-        // Read in the number of buffers, which should now always be one.
-        int8_t numBuffers = 0;
-        is.read(reinterpret_cast<char*>(&numBuffers), sizeof(int8_t));
-
-        // Read in the buffer.
-        // (Note: prior to the bool leaf optimization, buffers were always compressed.)
-        std::unique_ptr<bool[]> buf{new bool[SIZE]};
-        io::readData<bool>(is, buf.get(), SIZE, /*isCompressed=*/true);
-
-        // Transfer values to mBuffer.
-        mBuffer.mData.setOff();
-        for (Index i = 0; i < SIZE; ++i) {
-            if (buf[i]) mBuffer.mData.setOn(i);
-        }
-
-        if (numBuffers > 1) {
-            // Read in and discard auxiliary buffers that were created with
-            // earlier versions of the library.
-            for (int i = 1; i < numBuffers; ++i) {
-                io::readData<bool>(is, buf.get(), SIZE, /*isCompressed=*/true);
-            }
-        }
-    }
+    // Read in the mask for the voxel values.
+    mBuffer.mData.load(is);
 }
 
 
@@ -1064,6 +1041,8 @@ LeafNode<bool, Log2Dim>::writeBuffers(std::ostream& os, bool /*toHalf*/) const
     // Write out the voxel values.
     mBuffer.mData.save(os);
 }
+
+#endif // OPENVDB_ABI_VERSION_NUMBER < 14
 
 
 ////////////////////////////////////////
@@ -1088,7 +1067,6 @@ LeafNode<bool, Log2Dim>::operator!=(const LeafNode& other) const
 
 
 ////////////////////////////////////////
-
 
 template<Index Log2Dim>
 inline bool
@@ -1188,11 +1166,17 @@ template<Index Log2Dim>
 inline bool
 LeafNode<bool, Log2Dim>::probeValue(const Coord& xyz, bool& val) const
 {
-    const Index offset = this->coordToOffset(xyz);
+    return this->probeValue(this->coordToOffset(xyz), val);
+}
+
+template<Index Log2Dim>
+inline bool
+LeafNode<bool, Log2Dim>::probeValue(Index offset, bool& val) const
+{
+    OPENVDB_ASSERT(offset < SIZE);
     val = mBuffer.mData.isOn(offset);
     return mValueMask.isOn(offset);
 }
-
 
 template<Index Log2Dim>
 inline void
@@ -1609,6 +1593,8 @@ LeafNode<bool, Log2Dim>::combine2(const LeafNode& b0, const OtherNodeT& b1, Comb
         mBuffer.mData.set(i, result);
     }
 }
+
+/// @endcond
 
 
 } // namespace tree

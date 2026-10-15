@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 #ifndef OPENVDB_METADATA_HAS_BEEN_INCLUDED
 #define OPENVDB_METADATA_HAS_BEEN_INCLUDED
@@ -359,6 +359,7 @@ operator<<(std::ostream& ostr, const Metadata& metadata)
 using BoolMetadata   = TypedMetadata<bool>;
 using DoubleMetadata = TypedMetadata<double>;
 using FloatMetadata  = TypedMetadata<float>;
+using HalfMetadata   = TypedMetadata<math::half>;
 using Int32Metadata  = TypedMetadata<int32_t>;
 using Int64Metadata  = TypedMetadata<int64_t>;
 using StringMetadata = TypedMetadata<std::string>;

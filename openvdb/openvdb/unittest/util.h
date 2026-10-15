@@ -1,15 +1,17 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 #ifndef OPENVDB_UNITTEST_UTIL_HAS_BEEN_INCLUDED
 #define OPENVDB_UNITTEST_UTIL_HAS_BEEN_INCLUDED
 
 #include <openvdb/openvdb.h>
+#include <openvdb/io/io.h>
 #include <openvdb/math/Math.h> // for math::Random01
 #include <openvdb/tools/Prune.h>// for pruneLevelSet
 #include <sstream>
 
-namespace unittest_util {
+namespace unittest_util
+{
 
 enum SphereMode { SPHERE_DENSE, SPHERE_DENSE_NARROW_BAND, SPHERE_SPARSE_NARROW_BAND };
 
@@ -49,12 +51,14 @@ makeSphere(const openvdb::Coord& dim, const openvdb::Vec3f& center, float radius
                     acc.setValue(xyz, val);
                     break;
                 case SPHERE_DENSE_NARROW_BAND:
-                    acc.setValue(xyz, val < inside ? inside : outside < val ? outside : val);
+                    acc.setValue(xyz,
+                        openvdb::math::cwiseLessThan(val, inside) ? inside :
+                            openvdb::math::cwiseLessThan(outside, val) ? outside : val);
                     break;
                 case SPHERE_SPARSE_NARROW_BAND:
-                    if (val < inside)
+                    if (openvdb::math::cwiseLessThan(val, inside))
                         acc.setValueOff(xyz, inside);
-                    else if (outside < val)
+                    else if (openvdb::math::cwiseLessThan(outside, val))
                         acc.setValueOff(xyz, outside);
                     else
                         acc.setValue(xyz, val);

@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 //
 /// @file SOP_OpenVDB_Diagnostics.cc
 ///
@@ -1335,7 +1335,11 @@ class SOP_OpenVDB_Diagnostics: public hvdb::SOP_NodeVDB
 public:
     SOP_OpenVDB_Diagnostics(OP_Network*, const char* name, OP_Operator*);
     static OP_Node* factory(OP_Network*, const char* name, OP_Operator*);
-    int isRefInput(unsigned i) const override { return (i == 1); }
+    int isRefInput(OP_InputIdx i) const override
+    {
+        UT_ASSERT(i >= 0);
+        return (i == 1);
+    }
 
     int selectOperationTests();
     int validateOperationTests();

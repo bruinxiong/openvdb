@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /// @file PointMaskImpl.h
 ///
@@ -291,7 +291,6 @@ inline typename GridT::Ptr convertPointsToScalar(
 
 } // namespace point_mask_internal
 
-/// @endcond
 
 ////////////////////////////////////////
 
@@ -347,6 +346,7 @@ convertPointsToMask(
         nonConstPoints, transform, filter, deformer, threaded);
 }
 
+/// @endcond
 
 ////////////////////////////////////////
 

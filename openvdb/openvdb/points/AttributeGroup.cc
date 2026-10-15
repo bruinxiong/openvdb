@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /// @file points/AttributeGroup.cc
 
@@ -23,10 +23,6 @@ GroupHandle::GroupHandle(const GroupAttributeArray& array, const GroupType& offs
         , mBitMask(static_cast<GroupType>(1 << offset))
 {
     OPENVDB_ASSERT(isGroup(mArray));
-
-    // load data if delay-loaded
-
-    mArray.loadData();
 }
 
 
@@ -36,10 +32,6 @@ GroupHandle::GroupHandle(const GroupAttributeArray& array, const GroupType& bitM
     , mBitMask(bitMask)
 {
     OPENVDB_ASSERT(isGroup(mArray));
-
-    // load data if delay-loaded
-
-    mArray.loadData();
 }
 
 

@@ -1,5 +1,5 @@
 # Copyright Contributors to the OpenVDB Project
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 #[=======================================================================[
 
@@ -30,7 +30,7 @@
   library and the vdb_print binary are enabled.
 
   Note that various packages have inbuilt CMake module support. See the
-  CMake documentation for more ZLib, Doxygen, OpenGL, Boost and Python
+  CMake documentation for more ZLib, Doxygen, OpenGL and Python
   controls:
 
     https://cmake.org/cmake/help/latest/manual/cmake-modules.7.html
@@ -42,7 +42,7 @@
 
 # note: cmake_minimum_required must be called before project commands to
 #  ensure policy scope is set up correctly
-cmake_minimum_required(VERSION 3.18)
+cmake_minimum_required(VERSION 3.24)
 
 # CMP0091 allows for MSVC ABI targetting via CMAKE_MSVC_RUNTIME_LIBRARY
 # from CMake 3.15 and above. Must come before project().
@@ -52,8 +52,8 @@ endif()
 
 ###### Version
 
-set(OpenVDB_MAJOR_VERSION 11)
-set(OpenVDB_MINOR_VERSION 0)
+set(OpenVDB_MAJOR_VERSION 13)
+set(OpenVDB_MINOR_VERSION 1)
 set(OpenVDB_PATCH_VERSION 1)
 set(OpenVDB_VERSION "${OpenVDB_MAJOR_VERSION}.${OpenVDB_MINOR_VERSION}.${OpenVDB_PATCH_VERSION}")
 
@@ -80,7 +80,10 @@ option(OPENVDB_BUILD_NANOVDB "Build the NanoVDB library. Turns ON if USE_NANOVDB
 # Global options
 option(OPENVDB_ENABLE_RPATH "Build with RPATH information" ON)
 option(OPENVDB_ENABLE_ASSERTS "Build with asserts in OpenVDB code enabled" OFF)
-option(OPENVDB_USE_DELAYED_LOADING "Build the core OpenVDB library with delayed-loading." ON)
+option(OPENVDB_ENABLE_VEC_RELATIONAL_OPERATIONS [=[
+Enabled deprecated relational < and > operators on Vector types. This option
+will be switched to OFF and the feature will be subsequently removed in future
+releases.]=] ON)
 option(OPENVDB_CXX_STRICT "Enable or disable pre-defined compiler warnings" OFF)
 cmake_dependent_option(OPENVDB_INSTALL_CMAKE_MODULES
   "Install the provided OpenVDB CMake modules when building the core library"
@@ -102,8 +105,8 @@ option(USE_COLORED_OUTPUT "Always produce ANSI-colored output (GNU/Clang only)."
 cmake_dependent_option(USE_PKGCONFIG "Use pkg-config to search for dependent libraries." ON "NOT WIN32" OFF)
 option(USE_HOUDINI [=[
 Build the library against a Houdini installation. Turns on automatically if OPENVDB_BUILD_HOUDINI_PLUGIN is enabled.
-When enabled, you do not need to provide dependency locations for TBB, Blosc, Imath and OpenEXR. Boost must be
-provided. Imath/OpenEXR can optionally be provided.]=] OFF)
+When enabled, you do not need to provide dependency locations for TBB, Blosc, Imath and OpenEXR.
+Imath/OpenEXR can optionally be provided.]=] OFF)
 option(USE_MAYA [=[
 Build the library against a Maya installation. Turns on automatically if OPENVDB_BUILD_MAYA_PLUGIN is enabled.
 When enabled, you do not need to provide dependency locations for TBB. All other dependencies must be provided.]=] OFF)
@@ -131,9 +134,31 @@ required.]=] ${USE_EXR})
 option(USE_PNG "Use PNG while building openvdb components." OFF)
 option(USE_AX "Use OpenVDB AX while building openvdb components." ${OPENVDB_BUILD_AX})
 option(USE_NANOVDB "Use NanoVDB while building openvdb components." ${OPENVDB_BUILD_NANOVDB})
+option(USE_VCL [=[
+Use the internally supplied copy of Agner Fog's vectorclass (VCL) SIMD wrapper
+library to instrument OpenVDB tools. This also requires VCL to be installed
+along with OpenVDB headers. Only applicable which compiling for x86 targets.]=] OFF)
+set(OPENVDB_X86_INSTRSET 0 CACHE STRING [=[
+The x86 instruction set to use. When unset, if USE_VCL is ON, this is
+automatically configured based on provided build flags. When unset and USE_VCL
+is OFF, defaults to 0. It is expected for you to provide this flag. Available
+values are:
+    0:  Unknown or unspecified
+    1:  SSE             -msse
+    2:  SSE2            -msse2 # Minimum on x86_64
+    3:  SSE3            -msse3
+    4:  SSSE3           -mssse3
+    5:  SSE4.1          -msse4.1
+    6:  SSE4.2          -msse4.2 # Minimum recommended where supported
+    7:  AVX             -mavx
+    8:  AVX2            -mavx2
+    9:  AVX512F         -mavx512f
+    10: AVX512BW/DQ/VL  -mavx512bw -mavx512dq -mavx512vl
+Note that (while not strictly enforced by vendors) each option implies all
+preceeding flags. If you need more granular control you can provide your
+desired flags via CXX_FLAGS. Only applicable which compiling for x86 targets.
+]=])
 
-cmake_dependent_option(OPENVDB_DISABLE_BOOST_IMPLICIT_LINKING
-  "Disable the implicit linking of Boost libraries on Windows" ON "WIN32" OFF)
 option(USE_STATIC_DEPENDENCIES [=[
 Only search for and use static libraries. If OFF the shared versions of requried libraries are prioritised, falling
 back to static libraries. Forcing individual static dependencies can be enabled by setting XXX_USE_STATIC_LIBS
@@ -170,19 +195,6 @@ if(NOT CONCURRENT_MALLOC)
 elseif(NOT ${CONCURRENT_MALLOC} IN_LIST _CONCURRENT_MALLOC_OPTIONS)
   message(WARNING "Unrecognized value for CONCURRENT_MALLOC, using Auto instead.")
   set(CONCURRENT_MALLOC Auto CACHE STRING FORCE)
-endif()
-
-set(_OPENVDB_SIMD_OPTIONS None SSE42 AVX)
-if(NOT OPENVDB_SIMD)
-  set(OPENVDB_SIMD None CACHE STRING
-    "Choose whether to enable SIMD compiler flags or not, options are: None SSE42 AVX.
-    Although not required, it is strongly recommended to enable SIMD. AVX implies SSE42.
-    None is the default." FORCE
-  )
-elseif(NOT ${OPENVDB_SIMD} IN_LIST _OPENVDB_SIMD_OPTIONS)
-  message(WARNING "Unrecognized or unsupported value for OPENVDB_SIMD, "
-    "using None instead.")
-  set(OPENVDB_SIMD None CACHE STRING FORCE)
 endif()
 
 if(USE_BLOSC AND NOT USE_ZLIB)
@@ -249,7 +261,6 @@ mark_as_advanced(
   OPENVDB_BUILD_HOUDINI_ABITESTS
   OPENVDB_CXX_STRICT
   OPENVDB_ENABLE_RPATH
-  OPENVDB_USE_DELAYED_LOADING
   OPENVDB_FUTURE_DEPRECATION
   OPENVDB_SIMD
   SYSTEM_LIBRARY_PATHS
@@ -268,6 +279,13 @@ mark_as_advanced(
 
 include(cmake/config/OpenVDBVersions.cmake)
 
+if(OPENVDB_FUTURE_DEPRECATION AND FUTURE_MINIMUM_CMAKE_VERSION)
+  if(CMAKE_VERSION VERSION_LESS ${FUTURE_MINIMUM_CMAKE_VERSION})
+    message(DEPRECATION "Support for CMake versions < ${FUTURE_MINIMUM_CMAKE_VERSION} "
+      "is deprecated and will be removed.")
+  endif()
+endif()
+
 foreach(DEPRECATED_ABI ${OPENVDB_DEPRECATED_ABI_LIST})
   option(OPENVDB_USE_DEPRECATED_ABI_${DEPRECATED_ABI} "Bypass minimum ABI requirement checks" OFF)
   mark_as_advanced(OPENVDB_USE_DEPRECATED_ABI_${DEPRECATED_ABI})
@@ -285,6 +303,30 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")
 
 # Add cmake modules to installation command
 
+if(SKBUILD)
+  set(OPENVDB_INSTALL_BINDIR openvdb/${CMAKE_INSTALL_BINDIR})
+  set(OPENVDB_INSTALL_LIBDIR openvdb/${CMAKE_INSTALL_LIBDIR})
+  set(OPENVDB_INSTALL_INCLUDEDIR openvdb/${CMAKE_INSTALL_INCLUDEDIR})
+
+  if(OPENVDB_BUILD_NANOVDB)
+    set(NANOVDB_INSTALL_BINDIR nanovdb/${CMAKE_INSTALL_BINDIR})
+    set(NANOVDB_INSTALL_LIBDIR nanovdb/${CMAKE_INSTALL_LIBDIR})
+    set(NANOVDB_INSTALL_INCLUDEDIR nanovdb/${CMAKE_INSTALL_INCLUDEDIR})
+    set(NANOVDB_INSTALL_DOCDIR nanovdb/${CMAKE_INSTALL_DOCDIR})
+  endif()
+else()
+  set(OPENVDB_INSTALL_BINDIR ${CMAKE_INSTALL_BINDIR})
+  set(OPENVDB_INSTALL_LIBDIR ${CMAKE_INSTALL_LIBDIR})
+  set(OPENVDB_INSTALL_INCLUDEDIR ${CMAKE_INSTALL_INCLUDEDIR})
+
+  if(OPENVDB_BUILD_NANOVDB)
+    set(NANOVDB_INSTALL_BINDIR ${CMAKE_INSTALL_BINDIR})
+    set(NANOVDB_INSTALL_LIBDIR ${CMAKE_INSTALL_LIBDIR})
+    set(NANOVDB_INSTALL_INCLUDEDIR ${CMAKE_INSTALL_INCLUDEDIR})
+    set(NANOVDB_INSTALL_DOCDIR ${CMAKE_INSTALL_DOCDIR})
+  endif()
+endif()
+
 if(OPENVDB_INSTALL_CMAKE_MODULES)
   set(OPENVDB_CMAKE_MODULES
     cmake/FindBlosc.cmake
@@ -298,7 +340,7 @@ if(OPENVDB_INSTALL_CMAKE_MODULES)
     cmake/OpenVDBMayaSetup.cmake
     cmake/OpenVDBUtils.cmake
   )
-  install(FILES ${OPENVDB_CMAKE_MODULES} DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/OpenVDB)
+  install(FILES ${OPENVDB_CMAKE_MODULES} DESTINATION ${OPENVDB_INSTALL_LIBDIR}/cmake/OpenVDB)
 endif()
 
 # Configure component dependencies by loading the Houdini/Maya setup
@@ -354,6 +396,28 @@ endif()
 
 #########################################################################
 
+# Still support -DOPENVDB_SIMD=SSE42 and -DOPENVDB_SIMD=AVX, these alias to
+# their respective OPENVDB_X86_INSTRSET value but, as a build option, are
+# deprecated. Not that the defines in version.h need to persist in case
+# downstream software was using them before including VDB headers
+set(_OPENVDB_SIMD_OPTIONS None SSE42 AVX)
+if(NOT OPENVDB_SIMD)
+  set(OPENVDB_SIMD None CACHE STRING "Deprecated, see OPENVDB_X86_INSTRSET." FORCE)
+else()
+  if(NOT ${OPENVDB_SIMD} IN_LIST _OPENVDB_SIMD_OPTIONS)
+    message(WARNING "Unrecognized or unsupported value for OPENVDB_SIMD, using None instead.")
+    set(OPENVDB_SIMD None CACHE STRING "Deprecated, see OPENVDB_X86_INSTRSET." FORCE)
+  endif()
+  message(DEPRECATION "The OPENVDB_SIMD option is deprecated and will be removed. Use OPENVDB_X86_INSTRSET.")
+  if(OPENVDB_SIMD STREQUAL "AVX")
+    set(OPENVDB_X86_INSTRSET 7)
+  elseif(OPENVDB_SIMD STREQUAL "SSE42")
+    set(OPENVDB_X86_INSTRSET 6)
+  endif()
+endif()
+
+#########################################################################
+
 # Configure general CMake and CXX settings
 
 include(cmake/config/OpenVDBCXX.cmake)
@@ -373,22 +437,6 @@ if(CONCURRENT_MALLOC STREQUAL "Auto")
   endif()
 endif()
 
-# Configure SIMD. AVX implies SSE 4.2.
-
-if(OPENVDB_SIMD STREQUAL "AVX")
-  if (CMAKE_SYSTEM_PROCESSOR MATCHES "(x86)|(X86)|(amd64)|(AMD64)")
-    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-mavx>")
-    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-msse4.2>")
-  endif()
-  add_compile_definitions("$<$<COMPILE_LANGUAGE:CXX>:OPENVDB_USE_AVX>")
-  add_compile_definitions("$<$<COMPILE_LANGUAGE:CXX>:OPENVDB_USE_SSE42>")
-elseif(OPENVDB_SIMD STREQUAL "SSE42")
-  if (CMAKE_SYSTEM_PROCESSOR MATCHES "(x86)|(X86)|(amd64)|(AMD64)")
-    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-msse4.2>")
-  endif()
-  add_compile_definitions("$<$<COMPILE_LANGUAGE:CXX>:OPENVDB_USE_SSE42>")
-endif()
-
 #########################################################################
 
 # Configure our cmake modules to only search for static libraries
@@ -400,7 +448,6 @@ if(USE_STATIC_DEPENDENCIES)
   set(LOG4CPLUS_USE_STATIC_LIBS ON)
   set(JEMALLOC_USE_STATIC_LIBS ON)
   set(GTEST_USE_STATIC_LIBS ON)
-  set(Boost_USE_STATIC_LIBS ON)
   # @todo  glfw needs custom support.
   # set(GLFW_USE_STATIC_LIBS ON)
 endif()
@@ -449,6 +496,44 @@ endif()
 if(NOT OPENVDB_BUILD_NANOVDB AND
    USE_NANOVDB)
   find_package(OpenVDB REQUIRED COMPONENTS nanovdb)
+endif()
+
+# Locate Python and nanobind if necessary
+if(OPENVDB_BUILD_PYTHON_MODULE OR (OPENVDB_BUILD_NANOVDB AND NANOVDB_BUILD_PYTHON_MODULE))
+
+  find_package(Python ${MINIMUM_PYTHON_VERSION} REQUIRED COMPONENTS Development Interpreter)
+  if(OPENVDB_FUTURE_DEPRECATION AND FUTURE_MINIMUM_PYTHON_VERSION)
+    if(Python_VERSION VERSION_LESS ${FUTURE_MINIMUM_PYTHON_VERSION})
+      message(DEPRECATION "Support for Python versions < ${FUTURE_MINIMUM_GLFW_VERSION} "
+        "is deprecated and will be removed.")
+    endif()
+  endif()
+
+  find_package(nanobind REQUIRED CONFIG)
+  include(FindPackageHandleStandardArgs)
+  find_package_handle_standard_args(nanobind
+    FOUND_VAR nanobind_FOUND
+    REQUIRED_VARS NB_DIR
+    VERSION_VAR nanobind_VERSION)
+
+  if(OPENVDB_FUTURE_DEPRECATION AND FUTURE_MINIMUM_NANOBIND_VERSION)
+    if(nanobind_VERSION VERSION_LESS ${FUTURE_MINIMUM_NANOBIND_VERSION})
+      message(DEPRECATION "Support for nanobind versions < ${FUTURE_MINIMUM_NANOBIND_VERSION} "
+        "is deprecated and will be removed.")
+    endif()
+  endif()
+
+  if(NOT DEFINED VDB_PYTHON_INSTALL_DIRECTORY)
+    if(DEFINED Python_SITELIB)
+      get_filename_component(Python_PACKAGES_DIR ${Python_SITELIB} NAME)
+    else()
+      set(Python_PACKAGES_DIR "site-packages")
+    endif()
+    set(VDB_PYTHON_INSTALL_DIRECTORY
+      ${CMAKE_INSTALL_LIBDIR}/python${Python_VERSION_MAJOR}.${Python_VERSION_MINOR}/${Python_PACKAGES_DIR}
+      CACHE STRING "The directory to install the openvdb and nanovdb Python modules."
+    )
+  endif()
 endif()
 
 

@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 //
 /// @author Dan Bailey
 ///
@@ -948,7 +948,7 @@ public:
         // generate leaf offsets (if necessary)
         if (mLeafOffsets.empty()) {
             openvdb::points::pointOffsets(mLeafOffsets, mGrid->constTree(), resolvedFilter,
-                /*inCoreOnly=*/false, mSettings.threaded);
+                mSettings.threaded);
         }
 
         // set streaming arbitrary attribute array flags

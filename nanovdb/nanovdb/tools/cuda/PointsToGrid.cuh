@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /*!
     \file nanovdb/tools/cuda/PointsToGrid.cuh
@@ -12,17 +12,23 @@
              to only include it in .cu files (or other .cuh files)
 */
 
-#ifndef NVIDIA_TOOLS_CUDA_POINTSTOGRID_CUH_HAS_BEEN_INCLUDED
-#define NVIDIA_TOOLS_CUDA_POINTSTOGRID_CUH_HAS_BEEN_INCLUDED
+#ifndef NANOVDB_TOOLS_CUDA_POINTSTOGRID_CUH_HAS_BEEN_INCLUDED
+#define NANOVDB_TOOLS_CUDA_POINTSTOGRID_CUH_HAS_BEEN_INCLUDED
 
 #include <cub/cub.cuh>
-#include <cub/util_allocator.cuh>
+#include <thrust/binary_search.h>
+#include <thrust/execution_policy.h>
+#include <thrust/iterator/transform_iterator.h>
 #include <vector>
 #include <tuple>
+#include <cinttypes>
+#include <algorithm>
 
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/cuda/DeviceBuffer.h>
+#include <nanovdb/cuda/TempPool.h>
 #include <nanovdb/GridHandle.h>
+#include <nanovdb/cuda/HandleStorage.h>
 #include <nanovdb/tools/cuda/GridChecksum.cuh>
 #include <nanovdb/util/cuda/Timer.h>
 #include <nanovdb/util/cuda/Util.h>
@@ -39,7 +45,7 @@ namespace tools::cuda {// ======================================================
 ///        mainly used as a means to build a BVH acceleration structure for points, e.g. for efficient rendering.
 /// @tparam PtrT Template type to a raw or fancy-pointer of point coordinates in world space. Dereferencing should return Vec3f or Vec3d.
 /// @tparam BufferT Template type of buffer used for memory allocation on the device
-/// @tparam AllocT  Template type of optional device allocator for internal temporary memory
+/// @tparam ResourceT Template type of optional resource used for internal temporary memory
 /// @param dWorldPoints Raw or fancy pointer to list of point coordinates in world space on the device
 /// @param pointCount number of point in the list @c d_world
 /// @param voxelSize Size of a voxel in world units used for the output grid
@@ -49,7 +55,7 @@ namespace tools::cuda {// ======================================================
 /// @param stream optional CUDA stream (defaults to CUDA stream 0)
 /// @return Returns a handle with a grid of type NanoGrid<Point> where point information, e.g. coordinates,
 ///         are represented as blind data defined by @c type.
-template<typename PtrT, typename BufferT = nanovdb::cuda::DeviceBuffer, typename AllocT = cub::CachingDeviceAllocator>
+template<typename PtrT, typename BufferT = nanovdb::cuda::DualDeviceBuffer, typename ResourceT = nanovdb::cuda::DeviceResource>
 GridHandle<BufferT>
 pointsToGrid(const PtrT dWorldPoints,
              int pointCount,
@@ -64,13 +70,13 @@ pointsToGrid(const PtrT dWorldPoints,
 ///        mainly used as a means to build a BVH acceleration structure for points, e.g. for efficient rendering.
 /// @tparam PtrT Template type to a raw or fancy-pointer of point coordinates in world space. Dereferencing should return Vec3f or Vec3d.
 /// @tparam BufferT Template type of buffer used for memory allocation on the device
-/// @tparam AllocT  Template type of optional device allocator for internal temporary memory
+/// @tparam ResourceT Template type of optional resource used for internal temporary memory
 /// @param dWorldPoints Raw or fancy pointer to list of point coordinates in world space on the device
 /// @param pointCount total number of point in the list @c d_world
 /// @param maxPointsPerVoxel Max density of points per voxel, i.e. maximum number of points in any voxel
 /// @param tolerance allow for point density to vary by the specified tolerance (defaults to 1). That is, the voxel size
 ///                  is selected such that the max density is +/- the tolerance.
-/// @param maxIterations Maximum number of iterations used to seach for a voxel size that produces a point density
+/// @param maxIterations Maximum number of iterations used to search for a voxel size that produces a point density
 ///                      with specified tolerance takes.
 /// @param type Defined the way point information is represented in the output grid (see PointType enum in NanoVDB.h)
 ///             Should not be PointType::Disable!
@@ -78,7 +84,7 @@ pointsToGrid(const PtrT dWorldPoints,
 /// @param stream optional CUDA stream (defaults to CUDA stream 0)
 /// @return Returns a handle with a grid of type NanoGrid<Point> where point information, e.g. coordinates,
 ///         are represented as blind data defined by @c type.
-template<typename PtrT, typename BufferT = nanovdb::cuda::DeviceBuffer, typename AllocT = cub::CachingDeviceAllocator>
+template<typename PtrT, typename BufferT = nanovdb::cuda::DualDeviceBuffer, typename ResourceT = nanovdb::cuda::DeviceResource>
 GridHandle<BufferT>
 pointsToGrid(const PtrT dWorldPoints,
              int pointCount,
@@ -91,7 +97,7 @@ pointsToGrid(const PtrT dWorldPoints,
 
 //-----------------------------------------------------------------------------------------------------
 
-template<typename BuildT, typename PtrT, typename BufferT = nanovdb::cuda::DeviceBuffer, typename AllocT = cub::CachingDeviceAllocator>
+template<typename BuildT, typename PtrT, typename BufferT = nanovdb::cuda::DualDeviceBuffer, typename ResourceT = nanovdb::cuda::DeviceResource>
 GridHandle<BufferT>
 pointsToGrid(std::vector<std::tuple<const PtrT,size_t,double,PointType>> pointSet,
             const BufferT &buffer = BufferT(),
@@ -105,13 +111,13 @@ pointsToGrid(std::vector<std::tuple<const PtrT,size_t,double,PointType>> pointSe
 /// @tparam BuildT Template type of the return grid
 /// @tparam PtrT Template type to a raw or fancy-pointer of point coordinates in world space. Dereferencing should return Vec3f or Vec3d.
 /// @tparam BufferT Template type of buffer used for memory allocation on the device
-/// @tparam AllocT  Template type of optional device allocator for internal temporary memory
+/// @tparam ResourceT Template type of optional resource used for internal temporary memory
 /// @param dGridVoxels Raw or fancy pointer to list of voxel coordinates in grid (or index) space on the device
 /// @param pointCount number of voxel in the list @c dGridVoxels
 /// @param voxelSize Size of a voxel in world units used for the output grid
 /// @param buffer Instance of the device buffer used for memory allocation
 /// @return Returns a handle with the grid of type NanoGrid<BuildT>
-template<typename BuildT, typename PtrT, typename BufferT = nanovdb::cuda::DeviceBuffer, typename AllocT = cub::CachingDeviceAllocator>
+template<typename BuildT, typename PtrT, typename BufferT = nanovdb::cuda::DualDeviceBuffer, typename ResourceT = nanovdb::cuda::DeviceResource>
 GridHandle<BufferT>
 voxelsToGrid(const PtrT dGridVoxels,
              size_t voxelCount,
@@ -121,7 +127,7 @@ voxelsToGrid(const PtrT dGridVoxels,
 
 //-------------------------------------------------------------------------------------------------------
 
-template<typename BuildT, typename PtrT, typename BufferT = nanovdb::cuda::DeviceBuffer, typename AllocT = cub::CachingDeviceAllocator>
+template<typename BuildT, typename PtrT, typename BufferT = nanovdb::cuda::DualDeviceBuffer, typename ResourceT = nanovdb::cuda::DeviceResource>
 GridHandle<BufferT>
 voxelsToGrid(std::vector<std::tuple<const PtrT, size_t, double>> pointSet,
              const BufferT &buffer = BufferT(),
@@ -131,23 +137,23 @@ voxelsToGrid(std::vector<std::tuple<const PtrT, size_t, double>> pointSet,
 
 /// @brief Example class of a fancy pointer that can optionally be used as a template for writing
 ///        a custom fancy pointer that allows for particle coordinates to be arrange non-linearly
-///        in memory. For instance with coordinates are interlaced with other dats, i.e. an array
+///        in memory. For instance, when coordinates are interlaced with other data, e.g. an array
 ///        of structs, a custom implementation of fancy_ptr::operator[](size_t i) can account for
 ///        strides that skip other interlaces data.
 /// @tparam T Template type that specifies the type use for the coordinates of the points
-template <typename T>
+template<typename T>
 class fancy_ptr
 {
     const T* mPtr;
 public:
     /// @brief Default constructor.
-    /// @note  This method is atcually not required by cuda::PointsToGrid
+    /// @note  This method is actually not required by cuda::PointsToGrid
     /// @param ptr Pointer to array of elements
     __hostdev__ explicit fancy_ptr(const T* ptr = nullptr) : mPtr(ptr) {}
     /// @brief Index acces into the array pointed to by the stored pointer.
     /// @note  This method is required by cuda::PointsToGrid!
     /// @param i Unsigned index of the element to be returned
-    /// @return Const refernce to the element at the i'th poisiton
+    /// @return Const reference to the element at the i'th position
     __hostdev__ inline const T& operator[](size_t i) const {return mPtr[i];}
     /// @brief Dummy implementation required by pointer_traits.
     /// @note  Note that only the return type matters!
@@ -161,22 +167,22 @@ public:
 /// @tparam T Template type that specifies the type use for the coordinates of the points
 /// @param ptr Raw pointer to data
 /// @return a new instance of a fancy_ptr
-template <typename T>
+template<typename T>
 fancy_ptr<T> make_fancy(const T* ptr = nullptr) {return fancy_ptr<T>(ptr);}
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 /// @brief Trait of points, like type of pointer and size of the pointer type
-template <typename>
+template<typename>
 struct pointer_traits;
 
-template <typename T>
+template<typename T>
 struct pointer_traits<T*> {
     using element_type = T;
     static constexpr size_t element_size = sizeof(T);
 };
 
-template <typename T>
+template<typename T>
 struct pointer_traits {
     using element_type = typename util::remove_reference<decltype(*util::declval<T>())>::type;// assumes T::operator*() exists!
     static constexpr size_t element_size = sizeof(element_type);
@@ -189,7 +195,7 @@ struct pointer_traits {
 /// @param voxel 8-bit output coordinates that are relative to a voxel
 /// @param world input world coordinates
 /// @param indexToWorld Transform from index to world space
-template <typename Vec3T>
+template<typename Vec3T>
 __hostdev__ inline static void worldToVoxel(Vec3u8 &voxel, const Vec3T &world, const Map &indexToWorld)
 {
     const Vec3d ijk = indexToWorld.applyInverseMap(world);// world -> index
@@ -204,7 +210,7 @@ __hostdev__ inline static void worldToVoxel(Vec3u8 &voxel, const Vec3T &world, c
 /// @param voxel 16-bit output coordinates that are relative to a voxel
 /// @param world input world coordinates
 /// @param indexToWorld Transform from index to world space
-template <typename Vec3T>
+template<typename Vec3T>
 __hostdev__ inline static void worldToVoxel(Vec3u16 &voxel, const Vec3T &world, const Map &indexToWorld)
 {
     const Vec3d ijk = indexToWorld.applyInverseMap(world);// world -> index
@@ -219,7 +225,7 @@ __hostdev__ inline static void worldToVoxel(Vec3u16 &voxel, const Vec3T &world, 
 /// @param voxel float output coordinates that are relative to a voxel
 /// @param world input world coordinates
 /// @param indexToWorld Transform from index to world space
-template <typename Vec3T>
+template<typename Vec3T>
 __hostdev__ inline static void worldToVoxel(Vec3f &voxel, const Vec3T &world, const Map &indexToWorld)
 {
     const Vec3d ijk = indexToWorld.applyInverseMap(world);// world -> index
@@ -230,7 +236,7 @@ __hostdev__ inline static void worldToVoxel(Vec3f &voxel, const Vec3T &world, co
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-template <typename Vec3T = Vec3d>
+template<typename Vec3T = Vec3d>
 __hostdev__ inline static Vec3T voxelToWorld(const Vec3u8 &voxel, const Coord &ijk, const Map &map)
 {
     static constexpr double decode = 1.0/double((1<<8) - 1);
@@ -241,7 +247,7 @@ __hostdev__ inline static Vec3T voxelToWorld(const Vec3u8 &voxel, const Coord &i
     }
 }
 
-template <typename Vec3T = Vec3d>
+template<typename Vec3T = Vec3d>
 __hostdev__ inline static Vec3T voxelToWorld(const Vec3u16 &voxel, const Coord &ijk, const Map &map)
 {
     static constexpr double decode = 1.0/double((1<<16) - 1);
@@ -252,7 +258,7 @@ __hostdev__ inline static Vec3T voxelToWorld(const Vec3u16 &voxel, const Coord &
     }
 }
 
-template <typename Vec3T = Vec3d>
+template<typename Vec3T = Vec3d>
 __hostdev__ inline static Vec3T voxelToWorld(const Vec3f &voxel, const Coord &ijk, const Map &map)
 {
     if constexpr(util::is_same<Vec3T,Vec3d>::value) {
@@ -266,79 +272,90 @@ __hostdev__ inline static Vec3T voxelToWorld(const Vec3f &voxel, const Coord &ij
 
 namespace tools::cuda {
 
-template <typename BuildT, typename AllocT = cub::CachingDeviceAllocator>
+template<typename BuildT>
+struct PointsToGridData {
+    Map map;
+    void     *d_bufferPtr;
+    uint64_t *d_keys, *d_tile_keys, *d_lower_keys, *d_leaf_keys;// device pointer to 64 bit keys
+    uint64_t  grid, tree, root, upper, lower, leaf, meta, blind, size;// byte offsets to nodes in buffer
+    uint32_t *d_indx;// device pointer to point indices (or IDs)
+    uint32_t  nodeCount[3], *pointsPerLeafPrefix, *pointsPerLeaf;// 0=leaf,1=lower, 2=upper
+    uint32_t  voxelCount,  *pointsPerVoxelPrefix, *pointsPerVoxel;
+    __hostdev__ NanoGrid<BuildT>&  getGrid() const {return *util::PtrAdd<NanoGrid<BuildT>>(d_bufferPtr, grid);}
+    __hostdev__ NanoTree<BuildT>&  getTree() const {return *util::PtrAdd<NanoTree<BuildT>>(d_bufferPtr, tree);}
+    __hostdev__ NanoRoot<BuildT>&  getRoot() const {return *util::PtrAdd<NanoRoot<BuildT>>(d_bufferPtr, root);}
+    __hostdev__ NanoUpper<BuildT>& getUpper(int i) const {return *(util::PtrAdd<NanoUpper<BuildT>>(d_bufferPtr, upper)+i);}
+    __hostdev__ NanoLower<BuildT>& getLower(int i) const {return *(util::PtrAdd<NanoLower<BuildT>>(d_bufferPtr, lower)+i);}
+    __hostdev__ NanoLeaf<BuildT>&  getLeaf(int i) const {return *(util::PtrAdd<NanoLeaf<BuildT>>(d_bufferPtr, leaf)+i);}
+    __hostdev__ GridBlindMetaData& getMeta() const { return *util::PtrAdd<GridBlindMetaData>(d_bufferPtr, meta);};
+     template<typename Vec3T>
+    __hostdev__ Vec3T& getPoint(int i) const {return *(util::PtrAdd<Vec3T>(d_bufferPtr, blind)+i);}
+};// PointsToGridData
+
+
+template<typename BuildT, typename ResourceT = nanovdb::cuda::DeviceResource>
 class PointsToGrid
 {
+    static_assert(nanovdb::cuda::is_async_resource<ResourceT>::value,
+                  "PointsToGrid allocates stream-ordered scratch and requires an AsyncResource");
 public:
-
-    struct Data {
-        Map map;
-        void     *d_bufferPtr;
-        uint64_t *d_keys, *d_tile_keys, *d_lower_keys, *d_leaf_keys;// device pointer to 64 bit keys
-        uint64_t  grid, tree, root, upper, lower, leaf, meta, blind, size;// byte offsets to nodes in buffer
-        uint32_t *d_indx;// device pointer to point indices (or IDs)
-        uint32_t  nodeCount[3], *pointsPerLeafPrefix, *pointsPerLeaf;// 0=leaf,1=lower, 2=upper
-        uint32_t  voxelCount,  *pointsPerVoxelPrefix, *pointsPerVoxel;
-        BitFlags<16> flags;
-        __hostdev__ NanoGrid<BuildT>&  getGrid() const {return *util::PtrAdd<NanoGrid<BuildT>>(d_bufferPtr, grid);}
-        __hostdev__ NanoTree<BuildT>&  getTree() const {return *util::PtrAdd<NanoTree<BuildT>>(d_bufferPtr, tree);}
-        __hostdev__ NanoRoot<BuildT>&  getRoot() const {return *util::PtrAdd<NanoRoot<BuildT>>(d_bufferPtr, root);}
-        __hostdev__ NanoUpper<BuildT>& getUpper(int i) const {return *(util::PtrAdd<NanoUpper<BuildT>>(d_bufferPtr, upper)+i);}
-        __hostdev__ NanoLower<BuildT>& getLower(int i) const {return *(util::PtrAdd<NanoLower<BuildT>>(d_bufferPtr, lower)+i);}
-        __hostdev__ NanoLeaf<BuildT>&  getLeaf(int i) const {return *(util::PtrAdd<NanoLeaf<BuildT>>(d_bufferPtr, leaf)+i);}
-        __hostdev__ GridBlindMetaData& getMeta() const { return *util::PtrAdd<GridBlindMetaData>(d_bufferPtr, meta);};
-         template <typename Vec3T>
-        __hostdev__ Vec3T& getPoint(int i) const {return *(util::PtrAdd<Vec3T>(d_bufferPtr, blind)+i);}
-    };// Data
-
     /// @brief Map constructor, which other constructors might call
     /// @param map Map to be used for the output device grid
     /// @param stream optional CUDA stream (defaults to CUDA stream 0)
-    PointsToGrid(const Map &map, cudaStream_t stream = 0)
+    PointsToGrid(const Map &map, cudaStream_t stream = 0, ResourceT& resource = nanovdb::cuda::default_resource<ResourceT>())
         : mStream(stream)
+        , mResource(&resource)
+        , mTimer(stream)
         , mPointType(util::is_same<BuildT,Point>::value ? PointType::Default : PointType::Disable)
+        , mDeviceDataBuf(stream, nanovdb::cuda::ResourceRef<ResourceT>(resource), 1, nanovdb::cuda::noInit)
+        , mKeysBuf(stream, nanovdb::cuda::ResourceRef<ResourceT>(resource), 0, nanovdb::cuda::noInit)
+        , mTileKeysBuf(stream, nanovdb::cuda::ResourceRef<ResourceT>(resource), 0, nanovdb::cuda::noInit)
+        , mLeafKeysBuf(stream, nanovdb::cuda::ResourceRef<ResourceT>(resource), 0, nanovdb::cuda::noInit)
+        , mLowerKeysBuf(stream, nanovdb::cuda::ResourceRef<ResourceT>(resource), 0, nanovdb::cuda::noInit)
+        , mIndxBuf(stream, nanovdb::cuda::ResourceRef<ResourceT>(resource), 0, nanovdb::cuda::noInit)
+        , mPointsPerVoxelBuf(stream, nanovdb::cuda::ResourceRef<ResourceT>(resource), 0, nanovdb::cuda::noInit)
+        , mPointsPerVoxelPrefixBuf(stream, nanovdb::cuda::ResourceRef<ResourceT>(resource), 0, nanovdb::cuda::noInit)
+        , mPointsPerLeafBuf(stream, nanovdb::cuda::ResourceRef<ResourceT>(resource), 0, nanovdb::cuda::noInit)
+        , mPointsPerLeafPrefixBuf(stream, nanovdb::cuda::ResourceRef<ResourceT>(resource), 0, nanovdb::cuda::noInit)
+        , mTempDevicePool(resource)
     {
         mData.map = map;
-        mData.flags.initMask({GridFlags::HasBBox, GridFlags::IsBreadthFirst});
-        mDeviceData = mMemPool.template alloc<Data>(mStream);
+        mDeviceData = mDeviceDataBuf.data();
     }
 
     /// @brief Default constructor that calls the Map constructor defined above
     /// @param scale Voxel size in world units
     /// @param trans Translation of origin in world units
     /// @param stream optional CUDA stream (defaults to CUDA stream 0)
-    PointsToGrid(const double scale = 1.0, const Vec3d &trans = Vec3d(0.0), cudaStream_t stream = 0)
-        : PointsToGrid(Map(scale, trans), stream){}
+    PointsToGrid(const double scale = 1.0, const Vec3d &trans = Vec3d(0.0), cudaStream_t stream = 0, ResourceT& resource = nanovdb::cuda::default_resource<ResourceT>())
+        : PointsToGrid(Map(scale, trans), stream, resource){}
 
     /// @brief Constructor from a target maximum number of particles per voxel. Calls the Map constructor defined above
     /// @param maxPointsPerVoxel Maximum number of points oer voxel
     /// @param stream optional CUDA stream (defaults to CUDA stream 0)
-    PointsToGrid(int maxPointsPerVoxel, int tolerance = 1, int maxIterations = 10, cudaStream_t stream = 0)
-        : PointsToGrid(Map(1.0), stream)
+    PointsToGrid(int maxPointsPerVoxel, int tolerance = 1, int maxIterations = 10, cudaStream_t stream = 0, ResourceT& resource = nanovdb::cuda::default_resource<ResourceT>())
+        : PointsToGrid(Map(1.0), stream, resource)
     {
         mMaxPointsPerVoxel = maxPointsPerVoxel;
         mTolerance = tolerance;
         mMaxIterations = maxIterations;
     }
 
+
     /// @brief Toggle on and off verbose mode
     /// @param level Verbose level: 0=quiet, 1=timing, 2=benchmarking
-    void setVerbose(int level = 1) {mVerbose = level; mData.flags.setBit(7u, level); }
+    void setVerbose(int level = 1) {mVerbose = level; }
 
     /// @brief Set the mode for checksum computation, which is disabled by default
     /// @param mode Mode of checksum computation
     void setChecksum(CheckMode mode = CheckMode::Disable){mChecksum = mode;}
-
-    /// @brief Toggle on and off the computation of a bounding-box
-    /// @param on If true bbox will be computed
-    void includeBBox(bool on = true) { mData.flags.setMask(GridFlags::HasBBox, on); }
 
     /// @brief Set the name of the output grid
     /// @param name name of the output grid
     void setGridName(const std::string &name) {mGridName = name;}
 
     // only available when BuildT == Point
-    template <typename T = BuildT> typename util::enable_if<util::is_same<T, Point>::value>::type
+    template<typename T = BuildT> typename util::enable_if<util::is_same<T, Point>::value>::type
     setPointType(PointType type) { mPointType = type; }
 
     /// @brief Creates a handle to a grid with the specified build type from a list of points in index or world space
@@ -349,113 +366,102 @@ public:
     /// @param pointCount number of input points or voxels
     /// @param buffer optional buffer (currently ignored)
     /// @return returns a handle with a grid of type NanoGrid<BuildT>
-    template<typename PtrT, typename BufferT = nanovdb::cuda::DeviceBuffer>
+    template<typename PtrT, typename BufferT = nanovdb::cuda::DualDeviceBuffer>
     GridHandle<BufferT> getHandle(const PtrT points,
                                   size_t pointCount,
                                   const BufferT &buffer = BufferT());
 
-    template <typename PtrT>
+    template<typename PtrT>
     void countNodes(const PtrT points, size_t pointCount);
 
-    template <typename PtrT>
+    template<typename PtrT>
     void processGridTreeRoot(const PtrT points, size_t pointCount);
 
     void processUpperNodes();
 
     void processLowerNodes();
 
-    template <typename PtrT>
-    void processLeafNodes(const PtrT points);
+    void processLeafNodes(size_t pointCount);
 
-    template <typename PtrT>
+    template<typename PtrT>
     void processPoints(const PtrT points, size_t pointCount);
+
+    // Only instantiated when BuildT == Point, from the corresponding branch of
+    // processPoints. Holds the encode kernels because nvcc rejects an extended
+    // lambda defined directly inside the block of an if constexpr statement on
+    // some host compilers.
+    template<typename PtrT>
+    void encodePoints(const PtrT points, size_t pointCount);
 
     void processBBox();
 
     // the following methods are only defined when BuildT == Point
-    template <typename T = BuildT> typename util::enable_if<util::is_same<T, Point>::value, uint32_t>::type
+    template<typename T = BuildT> typename util::enable_if<util::is_same<T, Point>::value, uint32_t>::type
     maxPointsPerVoxel() const {return mMaxPointsPerVoxel;}
-    template <typename T = BuildT> typename util::enable_if<util::is_same<T, Point>::value, uint32_t>::type
+    template<typename T = BuildT> typename util::enable_if<util::is_same<T, Point>::value, uint32_t>::type
     maxPointsPerLeaf()  const {return mMaxPointsPerLeaf;}
 
 private:
     static constexpr unsigned int mNumThreads = 128;// seems faster than the old value of 256!
     static unsigned int numBlocks(unsigned int n) {return (n + mNumThreads - 1) / mNumThreads;}
 
-    cudaStream_t      mStream{0};
-    util::cuda::Timer mTimer;
-    PointType         mPointType;
-    std::string       mGridName;
-    int               mVerbose{0};
-    Data              mData, *mDeviceData;
-    uint32_t          mMaxPointsPerVoxel{0u}, mMaxPointsPerLeaf{0u};
-    int               mTolerance{1}, mMaxIterations{1};
-    CheckMode         mChecksum{CheckMode::Disable};
+    template<typename T>
+    using BufT = nanovdb::cuda::Buffer<T, nanovdb::cuda::ResourceRef<ResourceT>>;
+    nanovdb::cuda::ResourceRef<ResourceT> ref() { return nanovdb::cuda::ResourceRef<ResourceT>(*mResource); }
 
-    // wrapper of AllocT, defaulting to cub::CachingDeviceAllocator, which offers a shared scratch space
-    struct Allocator {
-        AllocT mAllocator;
-        void* d_scratch;
-        size_t scratchSize, actualScratchSize;
-        Allocator() : d_scratch(nullptr), scratchSize(0), actualScratchSize(0) {}
-        ~Allocator() {
-            if (scratchSize > 0) this->free(d_scratch);// a bug in cub makes this necessary
-            mAllocator.FreeAllCached();
-        }
-        template <typename T>
-        T* alloc(size_t count, cudaStream_t stream) {
-            T* d_ptr = nullptr;
-            cudaCheck(mAllocator.DeviceAllocate((void**)&d_ptr, sizeof(T)*count, stream));
-            return d_ptr;
-        }
-        template <typename T>
-        T* alloc(cudaStream_t stream) {return this->template alloc<T>(1, stream);}
-        void free(void *d_ptr) {if (d_ptr) cudaCheck(mAllocator.DeviceFree(d_ptr));}
-        template<class... T>
-        void free(void *d_ptr, T... other) {
-            if (d_ptr) cudaCheck(mAllocator.DeviceFree(d_ptr));
-            this->free(other...);
-        }
-        void adjustScratch(cudaStream_t stream){
-            if (scratchSize > actualScratchSize) {
-                if (actualScratchSize>0) cudaCheck(mAllocator.DeviceFree(d_scratch));
-                cudaCheck(mAllocator.DeviceAllocate((void**)&d_scratch, scratchSize, stream));
-                actualScratchSize = scratchSize;
-            }
-        }
-    } mMemPool;
+    cudaStream_t             mStream{0};
+    ResourceT*               mResource;// non-owning; all device allocations (mDeviceData + scratch) route through this resource instance
+    util::cuda::Timer        mTimer;
+    PointType                mPointType;
+    std::string              mGridName;
+    int                      mVerbose{0};
+    PointsToGridData<BuildT> mData, *mDeviceData;// mDeviceData views mDeviceDataBuf
+    // Owners of the device arrays that mData's raw pointers view. Raw views are
+    // refreshed immediately after every owner event (assign, swap, destroy), so
+    // the views -- including the device-visible fields inside mData -- are
+    // never stale. Members rather than locals because the pipeline frees them
+    // across member functions (countNodes allocates; processUpperNodes,
+    // processLeafNodes, processPoints and processBBox release).
+    BufT<PointsToGridData<BuildT>> mDeviceDataBuf;
+    BufT<uint64_t>           mKeysBuf, mTileKeysBuf, mLeafKeysBuf, mLowerKeysBuf;
+    BufT<uint32_t>           mIndxBuf, mPointsPerVoxelBuf, mPointsPerVoxelPrefixBuf, mPointsPerLeafBuf, mPointsPerLeafPrefixBuf;
+    uint32_t                 mMaxPointsPerVoxel{0u}, mMaxPointsPerLeaf{0u};
+    int                      mTolerance{1}, mMaxIterations{1};
+    CheckMode                mChecksum{CheckMode::Disable};
+
+    nanovdb::cuda::TempPool<ResourceT> mTempDevicePool;
 
     template<typename PtrT, typename BufferT>
     BufferT getBuffer(const PtrT points, size_t pointCount, const BufferT &buffer);
-};// tools::cuda::PointsToGrid<BuildT>
+};// tools::cuda::PointsToGrid<BuildT, ResourceT>
 
 namespace kernels {
-/// @details Used by cuda::PointsToGrid<BuildT>::processLeafNodes before the computation
+/// @details Used by cuda::PointsToGrid<BuildT, ResourceT>::processLeafNodes before the computation
 /// of prefix-sum for index grid.
 /// Moving this away from an implementation using the lambdaKernel wrapper
 /// to fix the following on Windows platform:
 /// error : For this host platform/dialect, an extended lambda cannot be defined inside the 'if'
 /// or 'else' block of a constexpr if statement.
 /// function in a lambda through lambdaKernel wrapper defined in CudaUtils.h.
-template <typename BuildT, typename AllocT = cub::CachingDeviceAllocator>
-__global__ void fillValueIndexKernel(const size_t numItems, uint64_t* devValueIndex, typename PointsToGrid<BuildT, AllocT>::Data* d_data) {
+template<typename BuildT>
+__global__ void fillValueIndexKernel(const size_t numItems, unsigned int offset, uint64_t* devValueIndex, PointsToGridData<BuildT>* d_data) {
     const int tid = blockIdx.x * blockDim.x + threadIdx.x;
     if (tid >= numItems) return;
-    devValueIndex[tid] = static_cast<uint64_t>(d_data->getLeaf(tid).mValueMask.countOn());
+    devValueIndex[tid + offset] = static_cast<uint64_t>(d_data->getLeaf(tid + offset).mValueMask.countOn());
 }
 
-/// @details Used by PointsToGrid<BuildT>::processLeafNodes for the computation
+/// @details Used by PointsToGrid<BuildT, ResourceT>::processLeafNodes for the computation
 /// of prefix-sum for index grid.
 /// Moving this away from an implementation using the lambdaKernel wrapper
 /// to fix the following on Windows platform:
 /// error : For this host platform/dialect, an extended lambda cannot be defined inside the 'if'
 /// or 'else' block of a constexpr if statement.
-template <typename BuildT, typename AllocT = cub::CachingDeviceAllocator>
-__global__ void leafPrefixSumKernel(const size_t numItems, uint64_t* devValueIndexPrefix, typename PointsToGrid<BuildT, AllocT>::Data* d_data) {
+template<typename BuildT>
+__global__ void leafPrefixSumKernel(const size_t numItems, unsigned int offset, uint64_t* devValueIndexPrefix, PointsToGridData<BuildT>* d_data) {
     const int tid = blockIdx.x * blockDim.x + threadIdx.x;
     if (tid >= numItems) return;
 
-    auto &leaf = d_data->getLeaf(tid);
+    auto &leaf = d_data->getLeaf(tid + offset);
     leaf.mOffset = 1u;// will be re-set below
     const uint64_t *w = leaf.mValueMask.words();
     uint64_t &prefixSum = leaf.mPrefixSum, sum = util::countOn(*w++);
@@ -464,26 +470,14 @@ __global__ void leafPrefixSumKernel(const size_t numItems, uint64_t* devValueInd
         sum += util::countOn(*w++);
         prefixSum |= sum << n;// each pre-fixed sum is encoded in 9 bits
     }
-    if (tid==0) {
+    if ((tid + offset) == 0) {
         d_data->getGrid().mData1 = 1u + devValueIndexPrefix[d_data->nodeCount[0]-1];// set total count
         d_data->getTree().mVoxelCount = devValueIndexPrefix[d_data->nodeCount[0]-1];
     } else {
-        leaf.mOffset = 1u + devValueIndexPrefix[tid-1];// background is index 0
+        leaf.mOffset = 1u + devValueIndexPrefix[tid + offset -1];// background is index 0
     }
 }
 
-/// @details Used by PointsToGrid<BuildT>::processLeafNodes to make sure leaf.mMask - leaf.mValueMask.
-/// Moving this away from an implementation using the lambdaKernel wrapper
-/// to fix the following on Windows platform:
-/// error : For this host platform/dialect, an extended lambda cannot be defined inside the 'if'
-/// or 'else' block of a constexpr if statement.
-template <typename BuildT, typename AllocT = cub::CachingDeviceAllocator>
-__global__ void setMaskEqValMaskKernel(const size_t numItems, typename PointsToGrid<BuildT, AllocT>::Data* d_data) {
-    const int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (tid >= numItems) return;
-    auto &leaf = d_data->getLeaf(tid);
-    leaf.mMask = leaf.mValueMask;
-}
 } // namespace kernels
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -492,25 +486,25 @@ __global__ void setMaskEqValMaskKernel(const size_t numItems, typename PointsToG
 #ifndef CALL_CUBS
 #ifdef _WIN32
 #define CALL_CUBS(func, ...) \
-    cudaCheck(cub::func(nullptr, mMemPool.scratchSize, __VA_ARGS__, mStream)); \
-    mMemPool.adjustScratch(mStream); \
-    cudaCheck(cub::func(mMemPool.d_scratch, mMemPool.scratchSize, __VA_ARGS__, mStream));
+    cudaCheck(cub::func(nullptr, mTempDevicePool.requestedSize(), __VA_ARGS__, mStream)); \
+    mTempDevicePool.reallocate(mStream); \
+    cudaCheck(cub::func(mTempDevicePool.data(), mTempDevicePool.size(), __VA_ARGS__, mStream));
 #else// fdef _WIN32
 #define CALL_CUBS(func, args...) \
-    cudaCheck(cub::func(nullptr, mMemPool.scratchSize, args, mStream)); \
-    mMemPool.adjustScratch(mStream); \
-    cudaCheck(cub::func(mMemPool.d_scratch, mMemPool.scratchSize, args, mStream));
+    cudaCheck(cub::func(nullptr, mTempDevicePool.requestedSize(), args, mStream)); \
+    mTempDevicePool.reallocate(mStream); \
+    cudaCheck(cub::func(mTempDevicePool.data(), mTempDevicePool.size(), args, mStream));
 #endif// ifdef _WIN32
 #endif// ifndef CALL_CUBS
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-template<typename BuildT, typename AllocT>
+template<typename BuildT, typename ResourceT>
 template<typename PtrT, typename BufferT>
 inline GridHandle<BufferT>
-PointsToGrid<BuildT, AllocT>::getHandle(const PtrT points,
-                                        size_t pointCount,
-                                        const BufferT &pool)
+PointsToGrid<BuildT, ResourceT>::getHandle(const PtrT points,
+                                size_t pointCount,
+                                const BufferT &pool)
 {
     if (mVerbose==1) mTimer.start("\nCounting nodes");
     this->countNodes(points, pointCount);
@@ -528,7 +522,7 @@ PointsToGrid<BuildT, AllocT>::getHandle(const PtrT points,
     this->processLowerNodes();
 
     if (mVerbose==1) mTimer.restart("Process leaf nodes");
-    this->processLeafNodes(points);
+    this->processLeafNodes(pointCount);
 
     if (mVerbose==1) mTimer.restart("Process points");
     this->processPoints(points, pointCount);
@@ -538,33 +532,94 @@ PointsToGrid<BuildT, AllocT>::getHandle(const PtrT points,
     if (mVerbose==1) mTimer.stop();
 
     if (mVerbose==1) mTimer.restart("Computation of checksum");
-    tools::cuda::updateChecksum((GridData*)buffer.deviceData(), mChecksum);
+    tools::cuda::updateChecksum((GridData*)nanovdb::cuda::detail::deviceStorageData(buffer), mChecksum, mStream);
     if (mVerbose==1) mTimer.stop();
 
+    cudaStreamSynchronize(mStream);
+
     return GridHandle<BufferT>(std::move(buffer));
-}// PointsToGrid<BuildT>::getHandle
+}// PointsToGrid<BuildT, ResourceT>::getHandle
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 // --- CUB helpers ---
-template<uint8_t BitCount, typename InT, typename OutT>
+template<uint8_t BitCount, typename InT = uint64_t, typename OutT = uint64_t>
 struct ShiftRight
 {
     __hostdev__ inline OutT operator()(const InT& v) const {return static_cast<OutT>(v >> BitCount);}
 };
 
-template<uint8_t BitCount, typename InT = uint64_t, typename OutT = uint64_t>
-struct ShiftRightIterator : public cub::TransformInputIterator<OutT, ShiftRight<BitCount, InT, OutT>, InT*>
-{
-    using BASE = cub::TransformInputIterator<OutT, ShiftRight<BitCount, InT, OutT>, InT*>;
-    __hostdev__ inline ShiftRightIterator(uint64_t* input_itr) : BASE(input_itr, ShiftRight<BitCount, InT, OutT>()) {}
-};
-
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-template <typename BuildT, typename AllocT>
-template <typename PtrT>
-void PointsToGrid<BuildT, AllocT>::countNodes(const PtrT points, size_t pointCount)
+template<typename BuildT, typename PtrT>
+struct TileKeyFunctor {
+    using Vec3T = typename util::remove_const<typename pointer_traits<PtrT>::element_type>::type;
+
+    __device__
+    void operator()(size_t tid, const PointsToGridData<BuildT> *d_data, const PtrT points, uint64_t* d_keys, uint32_t* d_indx) {
+        auto coordToKey = [](const Coord &ijk)->uint64_t{
+            // Note: int32_t has a range of -2^31 to 2^31 - 1 whereas uint32_t has a range of 0 to 2^32 - 1
+            static constexpr int64_t kOffset = 1 << 31;
+            return (uint64_t(uint32_t(int64_t(ijk[2]) + kOffset) >> 12)      ) | // z is the lower 21 bits
+                   (uint64_t(uint32_t(int64_t(ijk[1]) + kOffset) >> 12) << 21) | // y is the middle 21 bits
+                   (uint64_t(uint32_t(int64_t(ijk[0]) + kOffset) >> 12) << 42); //  x is the upper 21 bits
+        };// coordToKey lambda functor
+        d_indx[tid] = uint32_t(tid);
+        uint64_t &key = d_keys[tid];
+        if constexpr(util::is_same<BuildT, Point>::value) {// points are in world space
+            if constexpr(util::is_same<Vec3T, Vec3f>::value) {
+                key = coordToKey(d_data->map.applyInverseMapF(points[tid]).round());
+            } else {// points are Vec3d
+                key = coordToKey(d_data->map.applyInverseMap(points[tid]).round());
+            }
+        } else if constexpr(util::is_same<Vec3T, Coord>::value) {// points Coord are in index space
+            key = coordToKey(points[tid]);
+        } else {// points are Vec3f or Vec3d in index space
+            key = coordToKey(points[tid].round());
+        }
+    }
+};
+
+template<typename BuildT, typename PtrT>
+struct VoxelKeyFunctor {
+    using Vec3T = typename util::remove_const<typename pointer_traits<PtrT>::element_type>::type;
+
+    __device__
+    void operator()(size_t tid, const PointsToGridData<BuildT> *d_data, const PtrT points, uint64_t id, uint64_t *d_keys, const uint32_t *d_indx) {
+        auto voxelKey = [] __device__ (uint64_t tileID, const Coord &ijk){
+            return tileID << 36 |                                       // upper offset: 64-15-12-9=28, i.e. last 28 bits
+                uint64_t(NanoUpper<BuildT>::CoordToOffset(ijk)) << 21 | // lower offset: 32^3 = 2^15,   i.e. next 15 bits
+                uint64_t(NanoLower<BuildT>::CoordToOffset(ijk)) <<  9 | // leaf  offset: 16^3 = 2^12,   i.e. next 12 bits
+                uint64_t(NanoLeaf< BuildT>::CoordToOffset(ijk));        // voxel offset:  8^3 =  2^9,   i.e. first 9 bits
+        };// voxelKey lambda functor
+        Vec3T p = points[d_indx[tid]];
+        if constexpr(util::is_same<BuildT, Point>::value) p = util::is_same<Vec3T, Vec3f>::value ? d_data->map.applyInverseMapF(p) : d_data->map.applyInverseMap(p);
+        d_keys[tid] = voxelKey(id, p.round());
+    }
+};
+
+template<typename BuildT, typename PtrT>
+struct BulkVoxelKeyFunctor {
+    using Vec3T = typename util::remove_const<typename pointer_traits<PtrT>::element_type>::type;
+
+    __device__
+    void operator()(size_t tid, const PointsToGridData<BuildT> *d_data, const PtrT points, const uint32_t *d_tile_offsets, uint32_t numTiles, uint64_t *d_keys, const uint32_t *d_indx, uint32_t tileIdOffset) {
+        auto voxelKey = [] __device__ (uint64_t tileID, const Coord &ijk){
+            return tileID << 36 |                                       // upper offset: 64-15-12-9=28, i.e. last 28 bits
+                uint64_t(NanoUpper<BuildT>::CoordToOffset(ijk)) << 21 | // lower offset: 32^3 = 2^15,   i.e. next 15 bits
+                uint64_t(NanoLower<BuildT>::CoordToOffset(ijk)) <<  9 | // leaf  offset: 16^3 = 2^12,   i.e. next 12 bits
+                uint64_t(NanoLeaf< BuildT>::CoordToOffset(ijk));        // voxel offset:  8^3 =  2^9,   i.e. first 9 bits
+        };// voxelKey lambda functor
+        const uint64_t tileID = tileIdOffset + (thrust::upper_bound(thrust::seq, d_tile_offsets, d_tile_offsets + numTiles + 1, uint32_t(tid)) - d_tile_offsets - 1);
+        Vec3T p = points[d_indx[tid]];
+        if constexpr(util::is_same<BuildT, Point>::value) p = util::is_same<Vec3T, Vec3f>::value ? d_data->map.applyInverseMapF(p) : d_data->map.applyInverseMap(p);
+        d_keys[tid] = voxelKey(tileID, p.round());
+    }
+};
+
+template<typename BuildT, typename ResourceT>
+template<typename PtrT>
+void PointsToGrid<BuildT, ResourceT>::countNodes(const PtrT points, size_t pointCount)
 {
     using Vec3T = typename util::remove_const<typename pointer_traits<PtrT>::element_type>::type;
     if constexpr(util::is_same<BuildT, Point>::value) {
@@ -581,159 +636,201 @@ void PointsToGrid<BuildT, AllocT>::countNodes(const PtrT points, size_t pointCou
         bool operator<(const Foo &rhs) const {return density < rhs.density || (density == rhs.density && dx < rhs.dx);}
     } min{0.0, 1}, max{0.0, 0};// min: as dx -> 0 density -> 1 point per voxel, max: density is 0 i.e. undefined
 
-jump:// this marks the beginning of the actual algorithm
+    // Declared ahead of the search loop below: d_keys and d_node_count carry
+    // results past it, and the event is recorded and re-used across iterations
+    // (previously it was re-created per iteration, leaking the prior handle).
+    BufT<uint64_t> keysScratch(mStream, this->ref(), 0, nanovdb::cuda::noInit);
+    BufT<uint32_t> indxScratch(mStream, this->ref(), 0, nanovdb::cuda::noInit);
+    BufT<uint32_t> nodeCountScratch(mStream, this->ref(), 0, nanovdb::cuda::noInit);
+    uint64_t *d_keys = nullptr;
+    uint32_t *d_indx = nullptr, *d_points_per_tile = nullptr, *d_node_count = nullptr;
+    // Owns the copy event so the too-many-points-per-leaf throw below cannot
+    // leak the handle.
+    struct EventGuard {
+        cudaEvent_t event;
+        EventGuard() { cudaCheck(cudaEventCreate(&event)); }
+        ~EventGuard() { cudaCheck(cudaEventDestroy(event)); }
+        EventGuard(const EventGuard&) = delete;
+        EventGuard& operator=(const EventGuard&) = delete;
+    } eventGuard;
+    cudaEvent_t copyEvent = eventGuard.event;
 
-    mData.d_keys = mMemPool.template alloc<uint64_t>(pointCount, mStream);
-    mData.d_indx = mMemPool.template alloc<uint32_t>(pointCount, mStream);// uint32_t can index 4.29 billion Coords, corresponding to 48 GB
-    cudaCheck(cudaMemcpyAsync(mDeviceData, &mData, sizeof(Data), cudaMemcpyHostToDevice, mStream));// copy mData from CPU -> GPU
+    // Bisection search for the voxel size dx that yields the target point
+    // density: each iteration builds tile and voxel keys at the current dx,
+    // then either converges or frees this iteration's buffers and retries.
+    while (true) {
 
-    if (mVerbose==2) mTimer.start("\nAllocating arrays for keys and indices");
-    auto *d_keys = mMemPool.template alloc<uint64_t>(pointCount, mStream);
-    auto *d_indx = mMemPool.template alloc<uint32_t>(pointCount, mStream);
+        mKeysBuf = BufT<uint64_t>(mStream, this->ref(), pointCount, nanovdb::cuda::noInit);
+        mIndxBuf = BufT<uint32_t>(mStream, this->ref(), pointCount, nanovdb::cuda::noInit);// uint32_t can index 4.29 billion Coords, corresponding to 48 GB
+        mData.d_keys = mKeysBuf.data();
+        mData.d_indx = mIndxBuf.data();
+        cudaCheck(cudaMemcpyAsync(mDeviceData, &mData, sizeof(PointsToGridData<BuildT>), cudaMemcpyHostToDevice, mStream));// copy mData from CPU -> GPU
 
-    if (mVerbose==2) mTimer.restart("Generate tile keys");
-    util::cuda::lambdaKernel<<<numBlocks(pointCount), mNumThreads, 0, mStream>>>(pointCount, [=] __device__(size_t tid, const Data *d_data, const PtrT points) {
-        auto coordToKey = [](const Coord &ijk)->uint64_t{
-            // Note: int32_t has a range of -2^31 to 2^31 - 1 whereas uint32_t has a range of 0 to 2^32 - 1
-            static constexpr int64_t offset = 1 << 31;
-            return (uint64_t(uint32_t(int64_t(ijk[2]) + offset) >> 12)      ) | // z is the lower 21 bits
-                   (uint64_t(uint32_t(int64_t(ijk[1]) + offset) >> 12) << 21) | // y is the middle 21 bits
-                   (uint64_t(uint32_t(int64_t(ijk[0]) + offset) >> 12) << 42); //  x is the upper 21 bits
-        };// coordToKey lambda functor
-        d_indx[tid] = uint32_t(tid);
-        uint64_t &key = d_keys[tid];
-        if constexpr(util::is_same<BuildT, Point>::value) {// points are in world space
-            if constexpr(util::is_same<Vec3T, Vec3f>::value) {
-                key = coordToKey(d_data->map.applyInverseMapF(points[tid]).round());
-            } else {// points are Vec3d
-                key = coordToKey(d_data->map.applyInverseMap(points[tid]).round());
-            }
-        } else if constexpr(util::is_same<Vec3T, Coord>::value) {// points Coord are in index space
-            key = coordToKey(points[tid]);
-        } else {// points are Vec3f or Vec3d in index space
-            key = coordToKey(points[tid].round());
-        }
-    }, mDeviceData, points);
-    cudaCheckError();
-    if (mVerbose==2) mTimer.restart("DeviceRadixSort of "+std::to_string(pointCount)+" tile keys");
-    CALL_CUBS(DeviceRadixSort::SortPairs, d_keys, mData.d_keys, d_indx, mData.d_indx, pointCount, 0, 62);// 21 bits per coord
-    std::swap(d_indx, mData.d_indx);// sorted indices are now in d_indx
+        if (mVerbose==2) mTimer.start("\nAllocating arrays for keys and indices");
+        keysScratch = BufT<uint64_t>(mStream, this->ref(), pointCount, nanovdb::cuda::noInit);
+        indxScratch = BufT<uint32_t>(mStream, this->ref(), pointCount, nanovdb::cuda::noInit);
+        d_keys = keysScratch.data();
+        d_indx = indxScratch.data();
 
-    if (mVerbose==2) mTimer.restart("Allocate runs");
-    auto *d_points_per_tile = mMemPool.template alloc<uint32_t>(pointCount, mStream);
-    uint32_t *d_node_count  = mMemPool.template alloc<uint32_t>(3, mStream);
+        if (mVerbose==2) mTimer.restart("Generate tile keys");
+        util::cuda::lambdaKernel<<<numBlocks(pointCount), mNumThreads, 0, mStream>>>(pointCount, TileKeyFunctor<BuildT, PtrT>(), mDeviceData, points, d_keys, d_indx);
+        cudaCheckError();
+        if (mVerbose==2) mTimer.restart("DeviceRadixSort of "+std::to_string(pointCount)+" tile keys");
+        CALL_CUBS(DeviceRadixSort::SortPairs, d_keys, mData.d_keys, d_indx, mData.d_indx, pointCount, 0, 63);// 21 bits per coord
+        mIndxBuf.swap(indxScratch);// the sorted indices' owner is now indxScratch
+        d_indx = indxScratch.data();// sorted indices
+        mData.d_indx = mIndxBuf.data();// receives the voxel-sorted indices below
 
-    if (mVerbose==2) mTimer.restart("DeviceRunLengthEncode tile keys");
-    CALL_CUBS(DeviceRunLengthEncode::Encode, mData.d_keys, d_keys, d_points_per_tile, d_node_count+2, pointCount);
-    cudaCheck(cudaMemcpyAsync(mData.nodeCount+2, d_node_count+2, sizeof(uint32_t), cudaMemcpyDeviceToHost, mStream));
-    mData.d_tile_keys = mMemPool.template alloc<uint64_t>(mData.nodeCount[2], mStream);
-    cudaCheck(cudaMemcpyAsync(mData.d_tile_keys, d_keys, mData.nodeCount[2]*sizeof(uint64_t), cudaMemcpyDeviceToDevice, mStream));
+        if (mVerbose==2) mTimer.restart("Allocate runs");
+        BufT<uint32_t> pointsPerTileScratch(mStream, this->ref(), pointCount, nanovdb::cuda::noInit);
+        d_points_per_tile = pointsPerTileScratch.data();
+        nodeCountScratch = BufT<uint32_t>(mStream, this->ref(), 3, nanovdb::cuda::noInit);
+        d_node_count = nodeCountScratch.data();
 
-    if (mVerbose) mTimer.restart("DeviceRadixSort of " + std::to_string(pointCount) + " voxel keys in " + std::to_string(mData.nodeCount[2]) + " tiles");
-    uint32_t *points_per_tile = new uint32_t[mData.nodeCount[2]];
-    cudaCheck(cudaMemcpyAsync(points_per_tile, d_points_per_tile, mData.nodeCount[2]*sizeof(uint32_t), cudaMemcpyDeviceToHost, mStream));
-    mMemPool.free(d_points_per_tile);
+        if (mVerbose==2) mTimer.restart("DeviceRunLengthEncode tile keys");
+        CALL_CUBS(DeviceRunLengthEncode::Encode, mData.d_keys, d_keys, d_points_per_tile, d_node_count+2, pointCount);
+        cudaCheck(cudaMemcpyAsync(mData.nodeCount+2, d_node_count+2, sizeof(uint32_t), cudaMemcpyDeviceToHost, mStream));
+        cudaCheck(cudaStreamSynchronize(mStream));
+        mTileKeysBuf = BufT<uint64_t>(mStream, this->ref(), mData.nodeCount[2], nanovdb::cuda::noInit);
+        mData.d_tile_keys = mTileKeysBuf.data();
+        cudaCheck(cudaMemcpyAsync(mData.d_tile_keys, d_keys, mData.nodeCount[2]*sizeof(uint64_t), cudaMemcpyDeviceToDevice, mStream));
 
-    for (uint32_t id = 0, offset = 0; id < mData.nodeCount[2]; ++id) {
-        const uint32_t count = points_per_tile[id];
-        util::cuda::lambdaKernel<<<numBlocks(count), mNumThreads, 0, mStream>>>(count, [=] __device__(size_t tid, const Data *d_data) {
-            auto voxelKey = [] __device__ (uint64_t tileID, const Coord &ijk){
-                return tileID << 36 |                                       // upper offset: 64-15-12-9=28, i.e. last 28 bits
-                    uint64_t(NanoUpper<BuildT>::CoordToOffset(ijk)) << 21 | // lower offset: 32^3 = 2^15,   i.e. next 15 bits
-                    uint64_t(NanoLower<BuildT>::CoordToOffset(ijk)) <<  9 | // leaf  offset: 16^3 = 2^12,   i.e. next 12 bits
-                    uint64_t(NanoLeaf< BuildT>::CoordToOffset(ijk));        // voxel offset:  8^3 =  2^9,   i.e. first 9 bits
-            };// voxelKey lambda functor
-            tid += offset;
-            Vec3T p = points[d_indx[tid]];
-            if constexpr(util::is_same<BuildT, Point>::value) p = util::is_same<Vec3T, Vec3f>::value ? d_data->map.applyInverseMapF(p) : d_data->map.applyInverseMap(p);
-            d_keys[tid] = voxelKey(id, p.round());
-        }, mDeviceData); cudaCheckError();
-        CALL_CUBS(DeviceRadixSort::SortPairs, d_keys + offset, mData.d_keys + offset, d_indx + offset, mData.d_indx + offset, count, 0, 36);// 9+12+15=36
-        offset += count;
-    }
-    mMemPool.free(d_indx);
-    delete [] points_per_tile;
+        static constexpr uint32_t SEGMENTED_SORT_TILE_THRESHOLD = 32;
+        if (mData.nodeCount[2] >= SEGMENTED_SORT_TILE_THRESHOLD) {
+            // Bulk segmented sort: one kernel launch + one segmented radix sort (faster for many tiles)
+            if (mVerbose==2) mTimer.restart("Segmented radix sort of " + std::to_string(pointCount) + " voxel keys in " + std::to_string(mData.nodeCount[2]) + " tiles");
+            BufT<uint32_t> tileOffsetsScratch(mStream, this->ref(), mData.nodeCount[2]+1, nanovdb::cuda::noInit);
+            auto *d_tile_offsets = tileOffsetsScratch.data();
+            cudaCheck(cudaMemsetAsync(d_tile_offsets, 0, sizeof(uint32_t), mStream));
+            CALL_CUBS(DeviceScan::InclusiveSum, d_points_per_tile, d_tile_offsets + 1, mData.nodeCount[2]);
+            pointsPerTileScratch.destroy(); d_points_per_tile = nullptr;
 
-    if (mVerbose==2) mTimer.restart("Count points per voxel");
-
-    mData.pointsPerVoxel    = mMemPool.template alloc<uint32_t>(pointCount, mStream);
-    uint32_t *d_voxel_count = mMemPool.template alloc<uint32_t>(mStream);
-    CALL_CUBS(DeviceRunLengthEncode::Encode, mData.d_keys, d_keys, mData.pointsPerVoxel, d_voxel_count, pointCount);
-    cudaCheck(cudaMemcpyAsync(&mData.voxelCount, d_voxel_count, sizeof(uint32_t), cudaMemcpyDeviceToHost, mStream));
-    mMemPool.free(d_voxel_count);
-
-    if (util::is_same<BuildT, Point>::value) {
-        if (mVerbose==2) mTimer.restart("Count max points per voxel");
-        uint32_t *d_maxPointsPerVoxel = mMemPool.template alloc<uint32_t>(mStream), maxPointsPerVoxel;
-        CALL_CUBS(DeviceReduce::Max, mData.pointsPerVoxel, d_maxPointsPerVoxel, mData.voxelCount);
-        cudaCheck(cudaMemcpyAsync(&maxPointsPerVoxel, d_maxPointsPerVoxel, sizeof(uint32_t), cudaMemcpyDeviceToHost, mStream));
-        mMemPool.free(d_maxPointsPerVoxel);
-        double dx = mData.map.getVoxelSize()[0];
-        if (++iterCounter >= mMaxIterations || pointCount == 1u || math::Abs((int)maxPointsPerVoxel - (int)mMaxPointsPerVoxel) <= mTolerance) {
-            mMaxPointsPerVoxel = maxPointsPerVoxel;
+            util::cuda::lambdaKernel<<<numBlocks(pointCount), mNumThreads, 0, mStream>>>(pointCount, BulkVoxelKeyFunctor<BuildT, PtrT>(), mDeviceData, points, d_tile_offsets, mData.nodeCount[2], d_keys, d_indx, uint32_t(0));
+            cudaCheckError();
+            CALL_CUBS(DeviceSegmentedRadixSort::SortPairs, d_keys, mData.d_keys, d_indx, mData.d_indx, (int)pointCount, (int)mData.nodeCount[2], d_tile_offsets, d_tile_offsets + 1, 0, 36);
         } else {
-            const Foo tmp{dx, maxPointsPerVoxel};
-            if (maxPointsPerVoxel < mMaxPointsPerVoxel) {
-                if (min < tmp) min = tmp;
-            } else if (max.density == 0 || tmp < max) {
-                max = tmp;
+            // Serial per-tile sort: individual kernel + sort per tile (lower overhead for few tiles)
+            if (mVerbose==2) mTimer.restart("DeviceRadixSort of " + std::to_string(pointCount) + " voxel keys in " + std::to_string(mData.nodeCount[2]) + " tiles");
+            uint32_t *points_per_tile = new uint32_t[mData.nodeCount[2]];
+            cudaCheck(cudaMemcpyAsync(points_per_tile, d_points_per_tile, mData.nodeCount[2]*sizeof(uint32_t), cudaMemcpyDeviceToHost, mStream));
+            pointsPerTileScratch.destroy(); d_points_per_tile = nullptr;
+            for (uint32_t id = 0, offset = 0; id < mData.nodeCount[2]; ++id) {
+                const uint32_t count = points_per_tile[id];
+                util::cuda::offsetLambdaKernel<<<numBlocks(count), mNumThreads, 0, mStream>>>(count, offset, VoxelKeyFunctor<BuildT, PtrT>(), mDeviceData, points, id, d_keys, d_indx);
+                cudaCheckError();
+                CALL_CUBS(DeviceRadixSort::SortPairs, d_keys + offset, mData.d_keys + offset, d_indx + offset, mData.d_indx + offset, count, 0, 36);
+                offset += count;
             }
-            if (max.density) {
-                dx = (min.dx*(max.density - mMaxPointsPerVoxel) + max.dx*(mMaxPointsPerVoxel-min.density))/double(max.density-min.density);
-            } else if (maxPointsPerVoxel > 1u) {
-                dx *= (mMaxPointsPerVoxel-1.0)/(maxPointsPerVoxel-1.0);
-            } else {// maxPointsPerVoxel = 1 so increase dx significantly
-                dx *= 10.0;
-            }
-            if (mVerbose==2) printf("\ntarget density = %u, current density = %u current dx = %f, next dx = %f\n", mMaxPointsPerVoxel, maxPointsPerVoxel, tmp.dx, dx);
-            mData.map = Map(dx);
-            mMemPool.free(mData.d_keys, mData.d_indx, d_keys, mData.d_tile_keys, d_node_count, mData.pointsPerVoxel);
-            goto jump;
+            delete [] points_per_tile;
         }
-    }
+        indxScratch.destroy(); d_indx = nullptr;// tile-order copy, superseded by the voxel sort
+
+        if (mVerbose==2) mTimer.restart("Count points per voxel");
+
+        mPointsPerVoxelBuf = BufT<uint32_t>(mStream, this->ref(), pointCount, nanovdb::cuda::noInit);
+        mData.pointsPerVoxel = mPointsPerVoxelBuf.data();
+        BufT<uint32_t> voxelCountScratch(mStream, this->ref(), 1, nanovdb::cuda::noInit);
+        uint32_t *d_voxel_count = voxelCountScratch.data();
+        CALL_CUBS(DeviceRunLengthEncode::Encode, mData.d_keys, d_keys, mData.pointsPerVoxel, d_voxel_count, pointCount);
+        cudaCheck(cudaMemcpyAsync(&mData.voxelCount, d_voxel_count, sizeof(uint32_t), cudaMemcpyDeviceToHost, mStream));
+        cudaCheck(cudaEventRecord(copyEvent, mStream));
+        voxelCountScratch.destroy(); d_voxel_count = nullptr;
+
+        if (util::is_same<BuildT, Point>::value) {
+            if (mVerbose==2) mTimer.restart("Count max points per voxel");
+            BufT<uint32_t> maxPointsPerVoxelScratch(mStream, this->ref(), 1, nanovdb::cuda::noInit);
+            uint32_t *d_maxPointsPerVoxel = maxPointsPerVoxelScratch.data(), maxPointsPerVoxel;
+            cudaCheck(cudaEventSynchronize(copyEvent));
+            CALL_CUBS(DeviceReduce::Max, mData.pointsPerVoxel, d_maxPointsPerVoxel, mData.voxelCount);
+            cudaCheck(cudaMemcpyAsync(&maxPointsPerVoxel, d_maxPointsPerVoxel, sizeof(uint32_t), cudaMemcpyDeviceToHost, mStream));
+            cudaCheck(cudaEventRecord(copyEvent, mStream));
+            maxPointsPerVoxelScratch.destroy(); d_maxPointsPerVoxel = nullptr;
+            double dx = mData.map.getVoxelSize()[0];
+            cudaCheck(cudaEventSynchronize(copyEvent));
+            if (++iterCounter >= mMaxIterations || pointCount == 1u || math::Abs((int)maxPointsPerVoxel - (int)mMaxPointsPerVoxel) <= mTolerance) {
+                mMaxPointsPerVoxel = maxPointsPerVoxel;
+            } else {
+                const Foo tmp{dx, maxPointsPerVoxel};
+                if (maxPointsPerVoxel < mMaxPointsPerVoxel) {
+                    if (min < tmp) min = tmp;
+                } else if (max.density == 0 || tmp < max) {
+                    max = tmp;
+                }
+                if (max.density) {
+                    dx = (min.dx*(max.density - mMaxPointsPerVoxel) + max.dx*(mMaxPointsPerVoxel-min.density))/double(max.density-min.density);
+                } else if (maxPointsPerVoxel > 1u) {
+                    dx *= (mMaxPointsPerVoxel-1.0)/(maxPointsPerVoxel-1.0);
+                } else {// maxPointsPerVoxel = 1 so increase dx significantly
+                    dx *= 10.0;
+                }
+                if (mVerbose==2) printf("\ntarget density = %" PRIu32 ", current density = %" PRIu32 ", current dx = %f, next dx = %f\n", mMaxPointsPerVoxel, maxPointsPerVoxel, tmp.dx, dx);
+                mData.map = Map(dx);
+                // free before the next iteration reallocates, so peak device
+                // memory matches the pre-loop behavior
+                mKeysBuf.destroy();          mData.d_keys = nullptr;
+                mIndxBuf.destroy();          mData.d_indx = nullptr;
+                keysScratch.destroy();       d_keys = nullptr;
+                mTileKeysBuf.destroy();      mData.d_tile_keys = nullptr;
+                nodeCountScratch.destroy();  d_node_count = nullptr;
+                mPointsPerVoxelBuf.destroy();mData.pointsPerVoxel = nullptr;
+                continue;
+            }
+        }
+        break;
+    }// while (true)
     if (iterCounter>1 && mVerbose) std::cerr << "Used " << iterCounter << " attempts to determine dx that produces a target dpoint denisty\n\n";
 
     if (mVerbose==2) mTimer.restart("Compute prefix sum of points per voxel");
-    mData.pointsPerVoxelPrefix = mMemPool.template alloc<uint32_t>(mData.voxelCount, mStream);
+    cudaCheck(cudaEventSynchronize(copyEvent));
+    mPointsPerVoxelPrefixBuf = BufT<uint32_t>(mStream, this->ref(), mData.voxelCount, nanovdb::cuda::noInit);
+    mData.pointsPerVoxelPrefix = mPointsPerVoxelPrefixBuf.data();
     CALL_CUBS(DeviceScan::ExclusiveSum, mData.pointsPerVoxel, mData.pointsPerVoxelPrefix, mData.voxelCount);
 
-    mData.pointsPerLeaf = mMemPool.template alloc<uint32_t>(pointCount, mStream);
-    CALL_CUBS(DeviceRunLengthEncode::Encode, ShiftRightIterator<9>(mData.d_keys), d_keys, mData.pointsPerLeaf, d_node_count, pointCount);
+    mPointsPerLeafBuf = BufT<uint32_t>(mStream, this->ref(), pointCount, nanovdb::cuda::noInit);
+    mData.pointsPerLeaf = mPointsPerLeafBuf.data();
+    CALL_CUBS(DeviceRunLengthEncode::Encode, thrust::make_transform_iterator(mData.d_keys, ShiftRight<9>()), d_keys, mData.pointsPerLeaf, d_node_count, pointCount);
     cudaCheck(cudaMemcpyAsync(mData.nodeCount, d_node_count, sizeof(uint32_t), cudaMemcpyDeviceToHost, mStream));
+    cudaCheck(cudaEventRecord(copyEvent, mStream));
 
     if constexpr(util::is_same<BuildT, Point>::value) {
-        uint32_t *d_maxPointsPerLeaf = mMemPool.template alloc<uint32_t>(mStream);
+        BufT<uint32_t> maxPointsPerLeafScratch(mStream, this->ref(), 1, nanovdb::cuda::noInit);
+        uint32_t *d_maxPointsPerLeaf = maxPointsPerLeafScratch.data();
+        cudaCheck(cudaEventSynchronize(copyEvent));
         CALL_CUBS(DeviceReduce::Max, mData.pointsPerLeaf, d_maxPointsPerLeaf, mData.nodeCount[0]);
         cudaCheck(cudaMemcpyAsync(&mMaxPointsPerLeaf, d_maxPointsPerLeaf, sizeof(uint32_t), cudaMemcpyDeviceToHost, mStream));
         //printf("\n Leaf count = %u, max points per leaf = %u\n", mData.nodeCount[0], mMaxPointsPerLeaf);
         if (mMaxPointsPerLeaf > std::numeric_limits<uint16_t>::max()) {
             throw std::runtime_error("Too many points per leaf: "+std::to_string(mMaxPointsPerLeaf));
         }
-        mMemPool.free(d_maxPointsPerLeaf);
     }
 
-    mData.pointsPerLeafPrefix = mMemPool.template alloc<uint32_t>(mData.nodeCount[0], mStream);
+    cudaCheck(cudaEventSynchronize(copyEvent));
+    mPointsPerLeafPrefixBuf = BufT<uint32_t>(mStream, this->ref(), mData.nodeCount[0], nanovdb::cuda::noInit);
+    mData.pointsPerLeafPrefix = mPointsPerLeafPrefixBuf.data();
     CALL_CUBS(DeviceScan::ExclusiveSum, mData.pointsPerLeaf, mData.pointsPerLeafPrefix, mData.nodeCount[0]);
 
-    mData.d_leaf_keys = mMemPool.template alloc<uint64_t>(mData.nodeCount[0], mStream);
+    cudaCheck(cudaStreamSynchronize(mStream));
+    mLeafKeysBuf = BufT<uint64_t>(mStream, this->ref(), mData.nodeCount[0], nanovdb::cuda::noInit);
+    mData.d_leaf_keys = mLeafKeysBuf.data();
     cudaCheck(cudaMemcpyAsync(mData.d_leaf_keys, d_keys, mData.nodeCount[0]*sizeof(uint64_t), cudaMemcpyDeviceToDevice, mStream));
 
-    CALL_CUBS(DeviceSelect::Unique, ShiftRightIterator<12>(mData.d_leaf_keys), d_keys, d_node_count+1, mData.nodeCount[0]);// count lower nodes
+    CALL_CUBS(DeviceSelect::Unique, thrust::make_transform_iterator(mData.d_leaf_keys, ShiftRight<12>()), d_keys, d_node_count+1, mData.nodeCount[0]);// count lower nodes
     cudaCheck(cudaMemcpyAsync(mData.nodeCount+1, d_node_count+1, sizeof(uint32_t), cudaMemcpyDeviceToHost, mStream));
-    mData.d_lower_keys = mMemPool.template alloc<uint64_t>(mData.nodeCount[1], mStream);
+    cudaCheck(cudaStreamSynchronize(mStream));
+    mLowerKeysBuf = BufT<uint64_t>(mStream, this->ref(), mData.nodeCount[1], nanovdb::cuda::noInit);
+    mData.d_lower_keys = mLowerKeysBuf.data();
     cudaCheck(cudaMemcpyAsync(mData.d_lower_keys, d_keys, mData.nodeCount[1]*sizeof(uint64_t), cudaMemcpyDeviceToDevice, mStream));
 
-    mMemPool.free(d_keys, d_node_count);
     if (mVerbose==2) mTimer.stop();
 
     //printf("Leaf count = %u, lower count = %u, upper count = %u\n", mData.nodeCount[0], mData.nodeCount[1], mData.nodeCount[2]);
-}// PointsToGrid<BuildT>::countNodes
+}// PointsToGrid<BuildT, ResourceT>::countNodes
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-template <typename BuildT, typename AllocT>
-template <typename PtrT, typename BufferT>
-inline BufferT PointsToGrid<BuildT, AllocT>::getBuffer(const PtrT, size_t pointCount, const BufferT &pool)
+template<typename BuildT, typename ResourceT>
+template<typename PtrT, typename BufferT>
+inline BufferT PointsToGrid<BuildT, ResourceT>::getBuffer(const PtrT, size_t pointCount, const BufferT &pool)
 {
     auto sizeofPoint = [&]()->size_t{
         switch (mPointType){
@@ -760,28 +857,38 @@ inline BufferT PointsToGrid<BuildT, AllocT>::getBuffer(const PtrT, size_t pointC
     mData.blind = mData.meta  + sizeof(GridBlindMetaData)*int( mPointType!=PointType::Disable ); // meta data ends and blind data begins
     mData.size  = mData.blind + pointCount*sizeofPoint();// end of buffer
 
-    auto buffer = BufferT::create(mData.size, &pool, false);// only allocate buffer on the device
-    mData.d_bufferPtr = buffer.deviceData();
-    if (mData.d_bufferPtr == nullptr) throw std::runtime_error("Failed to allocate grid buffer on the device");
-    cudaCheck(cudaMemcpyAsync(mDeviceData, &mData, sizeof(Data), cudaMemcpyHostToDevice, mStream));// copy Data CPU -> GPU
+    int device = 0;
+    cudaGetDevice(&device);
+    auto buffer = nanovdb::cuda::detail::createDeviceStorage<BufferT>(mData.size, &pool, device, mStream); // only allocate buffer on the device
+
+    mData.d_bufferPtr = nanovdb::cuda::detail::deviceStorageData(buffer);
+    if (mData.d_bufferPtr == nullptr) throw std::runtime_error("The grid buffer type produced no device-accessible memory");
+    // Zero the whole grid buffer up front. This (a) makes the dense background
+    // fills (upper/lower value tables, inactive leaf values - all zero in this
+    // builder) redundant, so those kernels are skipped, and (b) makes the
+    // output bit-deterministic: alignment padding and stats fields no longer
+    // carry recycled pool bytes (which previously leaked into written files).
+    cudaCheck(cudaMemsetAsync(mData.d_bufferPtr, 0, mData.size, mStream));
+    cudaCheck(cudaMemcpyAsync(mDeviceData, &mData, sizeof(PointsToGridData<BuildT>), cudaMemcpyHostToDevice, mStream));// copy Data CPU -> GPU
     return buffer;
-}// PointsToGrid<BuildT>::getBuffer
+}// PointsToGrid<BuildT, ResourceT>::getBuffer
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-template <typename BuildT, typename AllocT>
-template <typename PtrT>
-inline void PointsToGrid<BuildT, AllocT>::processGridTreeRoot(const PtrT points, size_t pointCount)
+template<typename BuildT, typename PtrT>
+struct BuildGridTreeRootFunctor
 {
     using Vec3T = typename util::remove_const<typename pointer_traits<PtrT>::element_type>::type;
-    util::cuda::lambdaKernel<<<1, 1, 0, mStream>>>(1, [=] __device__(size_t, Data *d_data, PointType pointType) {
+
+    __device__
+    void operator()(size_t, PointsToGridData<BuildT> *d_data, PointType pointType, size_t pointCount) {
        // process Root
         auto &root = d_data->getRoot();
         root.mBBox = CoordBBox(); // init to empty
         root.mTableSize = d_data->nodeCount[2];
-        root.mBackground = NanoRoot<BuildT>::ValueType(0);// background_value
-        root.mMinimum = root.mMaximum = NanoRoot<BuildT>::ValueType(0);
-        root.mAverage = root.mStdDevi = NanoRoot<BuildT>::FloatType(0);
+        root.mBackground = typename NanoRoot<BuildT>::ValueType(0);// background_value
+        root.mMinimum = root.mMaximum = typename NanoRoot<BuildT>::ValueType(0);
+        root.mAverage = root.mStdDevi = typename NanoRoot<BuildT>::FloatType(0);
 
         // process Tree
         auto &tree = d_data->getTree();
@@ -789,9 +896,12 @@ inline void PointsToGrid<BuildT, AllocT>::processGridTreeRoot(const PtrT points,
         tree.setFirstNode(&d_data->getUpper(0));
         tree.setFirstNode(&d_data->getLower(0));
         tree.setFirstNode(&d_data->getLeaf(0));
-        tree.mNodeCount[2] = tree.mTileCount[2] = d_data->nodeCount[2];
-        tree.mNodeCount[1] = tree.mTileCount[1] = d_data->nodeCount[1];
-        tree.mNodeCount[0] = tree.mTileCount[0] = d_data->nodeCount[0];
+        tree.mNodeCount[2] = d_data->nodeCount[2];
+        tree.mNodeCount[1] = d_data->nodeCount[1];
+        tree.mNodeCount[0] = d_data->nodeCount[0];
+        tree.mTileCount[2] = 0;
+        tree.mTileCount[1] = 0;
+        tree.mTileCount[0] = 0;
         tree.mVoxelCount = d_data->voxelCount;
 
         // process Grid
@@ -883,33 +993,50 @@ inline void PointsToGrid<BuildT, AllocT>::processGridTreeRoot(const PtrT points,
                 } else if constexpr(util::is_same<Vec3T, Vec3d>::value){
                     util::strcpy(meta.mName, "World64: Vec3<double> point coordinates in world space");
                 } else {
-                    printf("Error in PointsToGrid<BuildT>::processGridTreeRoot: expected Vec3T = Vec3f or Vec3d\n");
+                    printf("Error in PointsToGrid<BuildT, ResourceT>::processGridTreeRoot: expected Vec3T = Vec3f or Vec3d\n");
                 }
                 break;
             default:
-                printf("Error in PointsToGrid<BuildT>::processGridTreeRoot: invalid pointType\n");
+                printf("Error in PointsToGrid<BuildT, ResourceT>::processGridTreeRoot: invalid pointType\n");
             }
+        } else if constexpr(BuildTraits<BuildT>::is_onindex) {
+            grid.mGridClass = GridClass::IndexGrid;
         } else if constexpr(BuildTraits<BuildT>::is_offindex) {
             grid.mData1 = 1u + 512u*d_data->nodeCount[0];
             grid.mGridClass = GridClass::IndexGrid;
         }
-    }, mDeviceData, mPointType);// lambdaKernel
+    }
+};
+
+template<typename BuildT, typename ResourceT>
+template<typename PtrT>
+inline void PointsToGrid<BuildT, ResourceT>::processGridTreeRoot(const PtrT points, size_t pointCount)
+{
+    util::cuda::lambdaKernel<<<1, 1, 0, mStream>>>(1, BuildGridTreeRootFunctor<BuildT, PtrT>(), mDeviceData, mPointType, pointCount);// lambdaKernel
     cudaCheckError();
 
+    // Zero the name field, then copy only the actual string (if any). The
+    // previous code copied MaxNameSize bytes from the std::string buffer
+    // (whose .data() is never null, so the memset branch was dead), reading
+    // up to 255 bytes past the allocation and leaking host heap contents
+    // into the grid - nondeterministic output and a hygiene issue for files.
     char *dst = mData.getGrid().mGridName;
-    if (const char *src = mGridName.data()) {
-        cudaCheck(cudaMemcpyAsync(dst, src, GridData::MaxNameSize, cudaMemcpyHostToDevice, mStream));
-    } else {
-        cudaCheck(cudaMemsetAsync(dst, 0, GridData::MaxNameSize, mStream));
+    cudaCheck(cudaMemsetAsync(dst, 0, GridData::MaxNameSize, mStream));
+    if (!mGridName.empty()) {
+        // Copy at most MaxNameSize-1 bytes so the memset's trailing '\0' always
+        // survives; a name >= MaxNameSize is truncated, never left unterminated.
+        const size_t nameSize = std::min<size_t>(mGridName.size(), GridData::MaxNameSize - 1);
+        cudaCheck(cudaMemcpyAsync(dst, mGridName.c_str(), nameSize, cudaMemcpyHostToDevice, mStream));
     }
-}// PointsToGrid<BuildT>::processGridTreeRoot
+}// PointsToGrid<BuildT, ResourceT>::processGridTreeRoot
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-template <typename BuildT, typename AllocT>
-inline void PointsToGrid<BuildT, AllocT>::processUpperNodes()
+template<typename BuildT>
+struct BuildUpperNodesFunctor
 {
-    util::cuda::lambdaKernel<<<numBlocks(mData.nodeCount[2]), mNumThreads, 0, mStream>>>(mData.nodeCount[2], [=] __device__(size_t tid, Data *d_data) {
+    __device__
+    void operator()(size_t tid, PointsToGridData<BuildT> *d_data) {
         auto &root  = d_data->getRoot();
         auto &upper = d_data->getUpper(tid);
 #if 1
@@ -922,34 +1049,45 @@ inline void PointsToGrid<BuildT, AllocT>::processUpperNodes()
         };
         const Coord ijk = keyToCoord(d_data->d_tile_keys[tid]);
 #else
-        const Coord ijk = NanoRoot<uint32_t>::KeyToCoord(d_data->d_tile_keys[tid]);
+        const Coord ijk = typename NanoRoot<uint32_t>::KeyToCoord(d_data->d_tile_keys[tid]);
 #endif
         root.tile(tid)->setChild(ijk, &upper, &root);
         upper.mBBox[0] = ijk;
-        upper.mFlags = 0;
+        upper.mFlags = (uint64_t) GridFlags::HasBBox;
         upper.mValueMask.setOff();
         upper.mChildMask.setOff();
-        upper.mMinimum = upper.mMaximum = NanoLower<BuildT>::ValueType(0);
-        upper.mAverage = upper.mStdDevi = NanoLower<BuildT>::FloatType(0);
-    }, mDeviceData);
-    cudaCheckError();
+        upper.mMinimum = upper.mMaximum = typename NanoLower<BuildT>::ValueType(0);
+        upper.mAverage = upper.mStdDevi = typename NanoLower<BuildT>::FloatType(0);
+    }
+};
 
-    mMemPool.free(mData.d_tile_keys);
-
-    const uint64_t valueCount = mData.nodeCount[2] << 15;
-    util::cuda::lambdaKernel<<<numBlocks(valueCount), mNumThreads, 0, mStream>>>(valueCount, [=] __device__(size_t tid, Data *d_data) {
+template<typename BuildT>
+struct SetUpperBackgroundValuesFunctor
+{
+    __device__
+    void operator()(size_t tid, PointsToGridData<BuildT> *d_data) {
         auto &upper = d_data->getUpper(tid >> 15);
-        upper.mTable[tid & 32767u].value = NanoUpper<BuildT>::ValueType(0);// background
-    }, mDeviceData);
+        upper.mTable[tid & 32767u].value = typename NanoUpper<BuildT>::ValueType(0);// background
+    }
+};
+
+template<typename BuildT, typename ResourceT>
+inline void PointsToGrid<BuildT, ResourceT>::processUpperNodes()
+{
+    util::cuda::lambdaKernel<<<numBlocks(mData.nodeCount[2]), mNumThreads, 0, mStream>>>(mData.nodeCount[2], BuildUpperNodesFunctor<BuildT>(), mDeviceData);
     cudaCheckError();
-}// PointsToGrid<BuildT>::processUpperNodes
+
+    mTileKeysBuf.destroy(); mData.d_tile_keys = nullptr;
+
+}// PointsToGrid<BuildT, ResourceT>::processUpperNodes
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-template <typename BuildT, typename AllocT>
-inline void PointsToGrid<BuildT, AllocT>::processLowerNodes()
+template<typename BuildT>
+struct BuildLowerNodesFunctor
 {
-    util::cuda::lambdaKernel<<<numBlocks(mData.nodeCount[1]), mNumThreads, 0, mStream>>>(mData.nodeCount[1], [=] __device__(size_t tid, Data *d_data) {
+    __device__
+    void operator()(size_t tid, PointsToGridData<BuildT> *d_data) {
         auto &root  = d_data->getRoot();
         const uint64_t lowerKey = d_data->d_lower_keys[tid];
         auto &upper = d_data->getUpper(lowerKey >> 15);
@@ -958,33 +1096,39 @@ inline void PointsToGrid<BuildT, AllocT>::processLowerNodes()
         auto &lower = d_data->getLower(tid);
         upper.setChild(upperOffset, &lower);
         lower.mBBox[0] = upper.offsetToGlobalCoord(upperOffset);
-        lower.mFlags = 0;
+        lower.mFlags = (uint64_t) GridFlags::HasBBox;
         lower.mValueMask.setOff();
         lower.mChildMask.setOff();
-        lower.mMinimum = lower.mMaximum = NanoLower<BuildT>::ValueType(0);// background;
-        lower.mAverage = lower.mStdDevi = NanoLower<BuildT>::FloatType(0);
-    }, mDeviceData);
+        lower.mMinimum = lower.mMaximum = typename NanoLower<BuildT>::ValueType(0);// background;
+        lower.mAverage = lower.mStdDevi = typename NanoLower<BuildT>::FloatType(0);
+    }
+};
+
+template<typename BuildT>
+struct SetLowerBackgroundValuesFunctor
+{
+    __device__
+    void operator()(size_t tid, PointsToGridData<BuildT> *d_data) {
+        auto &lower = d_data->getLower(tid >> 12);
+        lower.mTable[tid & 4095u].value = typename NanoLower<BuildT>::ValueType(0);// background
+    }
+};
+
+template<typename BuildT, typename ResourceT>
+inline void PointsToGrid<BuildT, ResourceT>::processLowerNodes()
+{
+    util::cuda::lambdaKernel<<<numBlocks(mData.nodeCount[1]), mNumThreads, 0, mStream>>>(mData.nodeCount[1], BuildLowerNodesFunctor<BuildT>(), mDeviceData);
     cudaCheckError();
 
-    const uint64_t valueCount = mData.nodeCount[1] << 12;
-    util::cuda::lambdaKernel<<<numBlocks(valueCount), mNumThreads, 0, mStream>>>(valueCount, [=] __device__(size_t tid, Data *d_data) {
-        auto &lower = d_data->getLower(tid >> 12);
-        lower.mTable[tid & 4095u].value = NanoLower<BuildT>::ValueType(0);// background
-    }, mDeviceData);
-    cudaCheckError();
-}// PointsToGrid<BuildT>::processLowerNodes
+}// PointsToGrid<BuildT, ResourceT>::processLowerNodes
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-template <typename BuildT, typename AllocT>
-template <typename PtrT>
-inline void PointsToGrid<BuildT, AllocT>::processLeafNodes(const PtrT points)
+template<typename BuildT>
+struct ProcessLeafMetaDataFunctor
 {
-    const uint8_t flags = static_cast<uint8_t>(mData.flags.data());// mIncludeStats ? 16u : 0u;// 4th bit indicates stats
-
-    if (mVerbose==2) mTimer.start("process leaf meta data");
-    // loop over leaf nodes and add it to its parent node
-    util::cuda::lambdaKernel<<<numBlocks(mData.nodeCount[0]), mNumThreads, 0, mStream>>>(mData.nodeCount[0], [=] __device__(size_t tid, Data *d_data) {
+    __device__
+    void operator()(size_t tid, PointsToGridData<BuildT> *d_data, uint8_t flags) {
         const uint64_t leafKey = d_data->d_leaf_keys[tid], tile_id = leafKey >> 27;
         auto &upper = d_data->getUpper(tile_id);
         const uint32_t lowerOffset = leafKey & 4095u, upperOffset = (leafKey >> 12) & 32767u;
@@ -1004,14 +1148,17 @@ inline void PointsToGrid<BuildT, AllocT>::processLeafNodes(const PtrT points)
             leaf.mOffset = tid*512u + 1u;// background is index 0
             leaf.mPrefixSum = 0u;
         } else if constexpr(!BuildTraits<BuildT>::is_special) {
-            leaf.mAverage = leaf.mStdDevi = NanoLeaf<BuildT>::FloatType(0);
-            leaf.mMinimum = leaf.mMaximum = NanoLeaf<BuildT>::ValueType(0);
+            leaf.mAverage = leaf.mStdDevi = typename NanoLeaf<BuildT>::FloatType(0);
+            leaf.mMinimum = leaf.mMaximum = typename NanoLeaf<BuildT>::ValueType(0);
         }
-    }, mDeviceData); cudaCheckError();
+    }
+};
 
-    if (mVerbose==2) mTimer.restart("set active voxel state and values");
-    // loop over all active voxels and set LeafNode::mValueMask and LeafNode::mValues
-    util::cuda::lambdaKernel<<<numBlocks(mData.voxelCount), mNumThreads, 0, mStream>>>(mData.voxelCount, [=] __device__(size_t tid, Data *d_data) {
+template<typename BuildT>
+struct SetLeafActiveVoxelStateAndValuesFunctor
+{
+    __device__
+    void operator()(size_t tid, PointsToGridData<BuildT> *d_data) {
         const uint32_t pointID  = d_data->pointsPerVoxelPrefix[tid];
         const uint64_t voxelKey = d_data->d_keys[pointID];
         auto &upper = d_data->getUpper(voxelKey >> 36);
@@ -1022,15 +1169,16 @@ inline void PointsToGrid<BuildT, AllocT>::processLeafNodes(const PtrT points)
         if constexpr(util::is_same<Point, BuildT>::value) {
             leaf.mValues[n] = uint16_t(pointID + d_data->pointsPerVoxel[tid] - leaf.offset());
         } else if constexpr(!BuildTraits<BuildT>::is_special) {
-            leaf.mValues[n] = NanoLeaf<BuildT>::ValueType(1);// set value of active voxels that are not points (or index)
+            leaf.mValues[n] = typename NanoLeaf<BuildT>::ValueType(1);// set value of active voxels that are not points (or index)
         }
-    }, mDeviceData); cudaCheckError();
+    }
+};
 
-    mMemPool.free(mData.d_keys, mData.pointsPerVoxel, mData.pointsPerVoxelPrefix, mData.pointsPerLeafPrefix, mData.pointsPerLeaf);
-
-    if (mVerbose==2) mTimer.restart("set inactive voxel values");
-    const uint64_t denseVoxelCount = mData.nodeCount[0] << 9;
-    util::cuda::lambdaKernel<<<numBlocks(denseVoxelCount), mNumThreads, 0, mStream>>>(denseVoxelCount, [=] __device__(size_t tid, Data *d_data) {
+template<typename BuildT>
+struct SetLeafInactiveVoxelValuesFunctor
+{
+    __device__
+    void operator()(size_t tid, PointsToGridData<BuildT> *d_data) {
         auto &leaf = d_data->getLeaf(tid >> 9u);
         const uint32_t n = tid & 511u;
         if (leaf.mValueMask.isOn(n)) return;
@@ -1038,198 +1186,274 @@ inline void PointsToGrid<BuildT, AllocT>::processLeafNodes(const PtrT points)
             const uint32_t m = leaf.mValueMask.findPrev<true>(n - 1);
             leaf.mValues[n] = m < 512u ? leaf.mValues[m] : 0u;
         } else if constexpr(!BuildTraits<BuildT>::is_special) {
-            leaf.mValues[n] = NanoLeaf<BuildT>::ValueType(0);// value of inactive voxels
+            leaf.mValues[n] = typename NanoLeaf<BuildT>::ValueType(0);// value of inactive voxels
         }
-    }, mDeviceData); cudaCheckError();
+    }
+};
+
+template<typename BuildT, typename ResourceT>
+inline void PointsToGrid<BuildT, ResourceT>::processLeafNodes(size_t pointCount)
+{
+    const uint8_t flags = (uint8_t) GridFlags::HasBBox;
+
+    if (mVerbose==2) mTimer.start("process leaf meta data");
+    // loop over leaf nodes and add it to its parent node
+    util::cuda::lambdaKernel<<<numBlocks(mData.nodeCount[0]), mNumThreads, 0, mStream>>>(mData.nodeCount[0], ProcessLeafMetaDataFunctor<BuildT>(), mDeviceData, flags);
+    cudaCheckError();
+
+    if (mVerbose==2) mTimer.restart("set active voxel state and values");
+    // loop over all active voxels and set LeafNode::mValueMask and LeafNode::mValues
+    util::cuda::lambdaKernel<<<numBlocks(mData.voxelCount), mNumThreads, 0, mStream>>>(mData.voxelCount, SetLeafActiveVoxelStateAndValuesFunctor<BuildT>(), mDeviceData);
+    cudaCheckError();
+
+    mKeysBuf.destroy();                mData.d_keys = nullptr;
+    mPointsPerVoxelBuf.destroy();      mData.pointsPerVoxel = nullptr;
+    mPointsPerVoxelPrefixBuf.destroy();mData.pointsPerVoxelPrefix = nullptr;
+    mPointsPerLeafPrefixBuf.destroy(); mData.pointsPerLeafPrefix = nullptr;
+    mPointsPerLeafBuf.destroy();       mData.pointsPerLeaf = nullptr;
+
+    // Inactive voxel values are zero for every build type except Point (which
+    // copies the previous active value for rank queries); the zero cases are
+    // covered by the buffer memset in getBuffer, and for index grids this
+    // dense pass (nodeCount[0]<<9 threads) is a no-op.
+    if constexpr(util::is_same<BuildT, Point>::value) {
+        if (mVerbose==2) mTimer.restart("set inactive voxel values");
+        const uint64_t denseVoxelCount = mData.nodeCount[0] << 9;
+        util::cuda::lambdaKernel<<<numBlocks(denseVoxelCount), mNumThreads, 0, mStream>>>(denseVoxelCount, SetLeafInactiveVoxelValuesFunctor<BuildT>(), mDeviceData);
+        cudaCheckError();
+    }
 
     if constexpr(BuildTraits<BuildT>::is_onindex) {
         if (mVerbose==2) mTimer.restart("prefix-sum for index grid");
-        uint64_t *devValueIndex = mMemPool.template alloc<uint64_t>(mData.nodeCount[0], mStream);
-        auto devValueIndexPrefix = mMemPool.template alloc<uint64_t>(mData.nodeCount[0], mStream);
-        kernels::fillValueIndexKernel<BuildT, AllocT><<<numBlocks(mData.nodeCount[0]), mNumThreads, 0, mStream>>>(mData.nodeCount[0], devValueIndex, mDeviceData);
+        BufT<uint64_t> valueIndexScratch(mStream, this->ref(), mData.nodeCount[0], nanovdb::cuda::noInit);
+        BufT<uint64_t> valueIndexPrefixScratch(mStream, this->ref(), mData.nodeCount[0], nanovdb::cuda::noInit);
+        auto devValueIndex = valueIndexScratch.data();
+        auto devValueIndexPrefix = valueIndexPrefixScratch.data();
+        kernels::fillValueIndexKernel<BuildT><<<numBlocks(mData.nodeCount[0]), mNumThreads, 0, mStream>>>(mData.nodeCount[0], 0, devValueIndex, mDeviceData);
         cudaCheckError();
         CALL_CUBS(DeviceScan::InclusiveSum, devValueIndex, devValueIndexPrefix, mData.nodeCount[0]);
-        mMemPool.free(devValueIndex);
-        kernels::leafPrefixSumKernel<BuildT, AllocT><<<numBlocks(mData.nodeCount[0]), mNumThreads, 0, mStream>>>(mData.nodeCount[0], devValueIndexPrefix, mDeviceData);
+        valueIndexScratch.destroy(); devValueIndex = nullptr;
+        kernels::leafPrefixSumKernel<BuildT><<<numBlocks(mData.nodeCount[0]), mNumThreads, 0, mStream>>>(mData.nodeCount[0], 0, devValueIndexPrefix, mDeviceData);
         cudaCheckError();
-        mMemPool.free(devValueIndexPrefix);
     }
 
-    if constexpr(BuildTraits<BuildT>::is_indexmask) {
-        if (mVerbose==2) mTimer.restart("leaf.mMask = leaf.mValueMask");
-        kernels::setMaskEqValMaskKernel<BuildT, AllocT><<<numBlocks(mData.nodeCount[0]), mNumThreads, 0, mStream>>>(mData.nodeCount[0], mDeviceData);
-        cudaCheckError();
-    }
     if (mVerbose==2) mTimer.stop();
-}// PointsToGrid<BuildT>::processLeafNodes
+}// PointsToGrid<BuildT, ResourceT>::processLeafNodes
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-template <typename BuildT, typename AllocT>
-template <typename PtrT>
-inline void PointsToGrid<BuildT, AllocT>::processPoints(const PtrT, size_t)
+// Undefine utility macro for cub functions
+#ifdef CALL_CUBS
+#undef CALL_CUBS
+#endif
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+// The point-encode kernels operate on device data and are independent of the
+// resource type; only the trailing d_indx deallocation routes through ResourceT.
+// Dispatching the encode with if constexpr keeps it reachable for any ResourceT.
+template<typename BuildT, typename ResourceT>
+template<typename PtrT>
+inline void PointsToGrid<BuildT, ResourceT>::processPoints(const PtrT points, size_t pointCount)
 {
-    mMemPool.free(mData.d_indx);
-}
+    if constexpr(util::is_same<BuildT, Point>::value) this->encodePoints(points, pointCount);
+    mIndxBuf.destroy(); mData.d_indx = nullptr;
+}// PointsToGrid<BuildT, ResourceT>::processPoints
 
-//-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-// Template specialization with BuildT = Point
-template <>
-template <typename PtrT>
-inline void PointsToGrid<Point>::processPoints(const PtrT points, size_t pointCount)
+template<typename BuildT, typename ResourceT>
+template<typename PtrT>
+inline void PointsToGrid<BuildT, ResourceT>::encodePoints(const PtrT points, size_t pointCount)
 {
     switch (mPointType){
     case PointType::Disable:
-        throw std::runtime_error("PointsToGrid<Point>::processPoints: mPointType == PointType::Disable\n");
+        throw std::runtime_error("PointsToGrid<Point, ResourceT>::encodePoints: mPointType == PointType::Disable\n");
     case PointType::PointID:
-        util::cuda::lambdaKernel<<<numBlocks(pointCount), mNumThreads, 0, mStream>>>(pointCount, [=] __device__(size_t tid, Data *d_data) {
+        util::cuda::lambdaKernel<<<numBlocks(pointCount), mNumThreads, 0, mStream>>>(pointCount, [=] __device__(size_t tid, PointsToGridData<Point> *d_data) {
             d_data->template getPoint<uint32_t>(tid) = d_data->d_indx[tid];
         }, mDeviceData); cudaCheckError();
         break;
     case PointType::World64:
-        util::cuda::lambdaKernel<<<numBlocks(pointCount), mNumThreads, 0, mStream>>>(pointCount, [=] __device__(size_t tid, Data *d_data) {
+        util::cuda::lambdaKernel<<<numBlocks(pointCount), mNumThreads, 0, mStream>>>(pointCount, [=] __device__(size_t tid, PointsToGridData<Point> *d_data) {
             d_data->template getPoint<Vec3d>(tid) = points[d_data->d_indx[tid]];
         }, mDeviceData); cudaCheckError();
         break;
     case PointType::World32:
-        util::cuda::lambdaKernel<<<numBlocks(pointCount), mNumThreads, 0, mStream>>>(pointCount, [=] __device__(size_t tid, Data *d_data) {
+        util::cuda::lambdaKernel<<<numBlocks(pointCount), mNumThreads, 0, mStream>>>(pointCount, [=] __device__(size_t tid, PointsToGridData<Point> *d_data) {
             d_data->template getPoint<Vec3f>(tid) = points[d_data->d_indx[tid]];
         }, mDeviceData); cudaCheckError();
         break;
     case PointType::Grid64:
-        util::cuda::lambdaKernel<<<numBlocks(pointCount), mNumThreads, 0, mStream>>>(pointCount, [=] __device__(size_t tid, Data *d_data) {
+        util::cuda::lambdaKernel<<<numBlocks(pointCount), mNumThreads, 0, mStream>>>(pointCount, [=] __device__(size_t tid, PointsToGridData<Point> *d_data) {
             d_data->template getPoint<Vec3d>(tid) = d_data->map.applyInverseMap(points[d_data->d_indx[tid]]);
         }, mDeviceData); cudaCheckError();
         break;
     case PointType::Grid32:
-        util::cuda::lambdaKernel<<<numBlocks(pointCount), mNumThreads, 0, mStream>>>(pointCount, [=] __device__(size_t tid, Data *d_data) {
+        util::cuda::lambdaKernel<<<numBlocks(pointCount), mNumThreads, 0, mStream>>>(pointCount, [=] __device__(size_t tid, PointsToGridData<Point> *d_data) {
             d_data->template getPoint<Vec3f>(tid) = d_data->map.applyInverseMapF(points[d_data->d_indx[tid]]);
         }, mDeviceData); cudaCheckError();
         break;
     case PointType::Voxel32:
-        util::cuda::lambdaKernel<<<numBlocks(pointCount), mNumThreads, 0, mStream>>>(pointCount, [=] __device__(size_t tid, Data *d_data) {
+        util::cuda::lambdaKernel<<<numBlocks(pointCount), mNumThreads, 0, mStream>>>(pointCount, [=] __device__(size_t tid, PointsToGridData<Point> *d_data) {
             worldToVoxel(d_data->template getPoint<Vec3f>(tid), points[d_data->d_indx[tid]], d_data->map);
         }, mDeviceData); cudaCheckError();
         break;
     case PointType::Voxel16:
-        util::cuda::lambdaKernel<<<numBlocks(pointCount), mNumThreads, 0, mStream>>>(pointCount, [=] __device__(size_t tid, Data *d_data) {
+        util::cuda::lambdaKernel<<<numBlocks(pointCount), mNumThreads, 0, mStream>>>(pointCount, [=] __device__(size_t tid, PointsToGridData<Point> *d_data) {
             worldToVoxel(d_data->template getPoint<Vec3u16>(tid), points[d_data->d_indx[tid]], d_data->map);
         }, mDeviceData); cudaCheckError();
         break;
     case PointType::Voxel8:
-        util::cuda::lambdaKernel<<<numBlocks(pointCount), mNumThreads, 0, mStream>>>(pointCount, [=] __device__(size_t tid, Data *d_data) {
+        util::cuda::lambdaKernel<<<numBlocks(pointCount), mNumThreads, 0, mStream>>>(pointCount, [=] __device__(size_t tid, PointsToGridData<Point> *d_data) {
             worldToVoxel(d_data->template getPoint<Vec3u8>(tid), points[d_data->d_indx[tid]], d_data->map);
         }, mDeviceData); cudaCheckError();
         break;
     case PointType::Default:
-        util::cuda::lambdaKernel<<<numBlocks(pointCount), mNumThreads, 0, mStream>>>(pointCount, [=] __device__(size_t tid, Data *d_data) {
+        util::cuda::lambdaKernel<<<numBlocks(pointCount), mNumThreads, 0, mStream>>>(pointCount, [=] __device__(size_t tid, PointsToGridData<Point> *d_data) {
             d_data->template getPoint<typename pointer_traits<PtrT>::element_type>(tid) = points[d_data->d_indx[tid]];
         }, mDeviceData); cudaCheckError();
         break;
     default:
-        printf("Internal error in PointsToGrid<Point>::processPoints\n");
+        printf("Internal error in PointsToGrid<Point, ResourceT>::encodePoints\n");
     }
-    mMemPool.free(mData.d_indx);
-}// PointsToGrid<Point>::processPoints
+}// PointsToGrid<BuildT, ResourceT>::encodePoints
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-template <typename BuildT, typename AllocT>
-inline void PointsToGrid<BuildT, AllocT>::processBBox()
+template<typename BuildT>
+struct ResetLowerNodeBBoxFunctor
 {
-    if (mData.flags.isMaskOff(GridFlags::HasBBox)) {
-        mMemPool.free(mData.d_leaf_keys, mData.d_lower_keys);
-        return;
-    }
-
-    // reset bbox in lower nodes
-    util::cuda::lambdaKernel<<<numBlocks(mData.nodeCount[1]), mNumThreads, 0, mStream>>>(mData.nodeCount[1], [=] __device__(size_t tid, Data *d_data) {
+    __device__
+    void operator()(size_t tid, PointsToGridData<BuildT> *d_data) {
         d_data->getLower(tid).mBBox = CoordBBox();
-    }, mDeviceData);
-    cudaCheckError();
+    }
+};
 
-    // update and propagate bbox from leaf -> lower/parent nodes
-    util::cuda::lambdaKernel<<<numBlocks(mData.nodeCount[0]), mNumThreads, 0, mStream>>>(mData.nodeCount[0], [=] __device__(size_t tid, Data *d_data) {
+template<typename BuildT>
+struct UpdateAndPropagateLeafBBoxFunctor
+{
+    __device__
+    void operator()(size_t tid, PointsToGridData<BuildT> *d_data) {
         const uint64_t leafKey = d_data->d_leaf_keys[tid];
         auto &upper = d_data->getUpper(leafKey >> 27);
         auto &lower = *upper.getChild((leafKey >> 12) & 32767u);
         auto &leaf = d_data->getLeaf(tid);
         leaf.updateBBox();
         lower.mBBox.expandAtomic(leaf.bbox());
-    }, mDeviceData);
-    mMemPool.free(mData.d_leaf_keys);
-    cudaCheckError();
+    }
+};
 
-    // reset bbox in upper nodes
-    util::cuda::lambdaKernel<<<numBlocks(mData.nodeCount[2]), mNumThreads, 0, mStream>>>(mData.nodeCount[2], [=] __device__(size_t tid, Data *d_data) {
+template<typename BuildT>
+struct ResetUpperNodeBBoxFunctor
+{
+    __device__
+    void operator()(size_t tid, PointsToGridData<BuildT> *d_data) {
         d_data->getUpper(tid).mBBox = CoordBBox();
-    }, mDeviceData);
-    cudaCheckError();
+    }
+};
 
-    // propagate bbox from lower -> upper/parent node
-    util::cuda::lambdaKernel<<<numBlocks(mData.nodeCount[1]), mNumThreads, 0, mStream>>>(mData.nodeCount[1], [=] __device__(size_t tid, Data *d_data) {
+template<typename BuildT>
+struct PropagateLowerBBoxFunctor
+{
+    __device__
+    void operator()(size_t tid, PointsToGridData<BuildT> *d_data) {
         const uint64_t lowerKey = d_data->d_lower_keys[tid];
         auto &upper = d_data->getUpper(lowerKey >> 15);
         auto &lower = d_data->getLower(tid);
         upper.mBBox.expandAtomic(lower.bbox());
-    }, mDeviceData);
-    mMemPool.free(mData.d_lower_keys);
-    cudaCheckError()
+    }
+};
+
+template<typename BuildT>
+struct PropagateUpperBBoxFunctor
+{
+    __device__
+    void operator()(size_t tid, PointsToGridData<BuildT> *d_data) {
+        d_data->getRoot().mBBox.expandAtomic(d_data->getUpper(tid).bbox());
+    }
+};
+
+template<typename BuildT>
+struct UpdateRootWorldBBoxFunctor
+{
+    __device__
+    void operator()(size_t tid, PointsToGridData<BuildT> *d_data) {
+        auto BBox = d_data->getRoot().mBBox;
+        BBox.max() += 1;
+        d_data->getGrid().mFlags.setMaskOn(GridFlags::HasBBox);
+        d_data->getGrid().mWorldBBox = BBox.transform(d_data->map);
+    }
+};
+
+template<typename BuildT, typename ResourceT>
+inline void PointsToGrid<BuildT, ResourceT>::processBBox()
+{
+    // reset bbox in lower nodes
+    util::cuda::lambdaKernel<<<numBlocks(mData.nodeCount[1]), mNumThreads, 0, mStream>>>(mData.nodeCount[1], ResetLowerNodeBBoxFunctor<BuildT>(), mDeviceData);
+    cudaCheckError();
+
+    // update and propagate bbox from leaf -> lower/parent nodes
+    util::cuda::lambdaKernel<<<numBlocks(mData.nodeCount[0]), mNumThreads, 0, mStream>>>(mData.nodeCount[0], UpdateAndPropagateLeafBBoxFunctor<BuildT>(), mDeviceData);
+    mLeafKeysBuf.destroy(); mData.d_leaf_keys = nullptr;
+    cudaCheckError();
+
+    // reset bbox in upper nodes
+    util::cuda::lambdaKernel<<<numBlocks(mData.nodeCount[2]), mNumThreads, 0, mStream>>>(mData.nodeCount[2], ResetUpperNodeBBoxFunctor<BuildT>(), mDeviceData);
+    cudaCheckError();
+
+    // propagate bbox from lower -> upper/parent node
+    util::cuda::lambdaKernel<<<numBlocks(mData.nodeCount[1]), mNumThreads, 0, mStream>>>(mData.nodeCount[1], PropagateLowerBBoxFunctor<BuildT>(), mDeviceData);
+    mLowerKeysBuf.destroy(); mData.d_lower_keys = nullptr;
+    cudaCheckError();
 
     // propagate bbox from upper -> root/parent node
-    util::cuda::lambdaKernel<<<numBlocks(mData.nodeCount[2]), mNumThreads, 0, mStream>>>(mData.nodeCount[2], [=] __device__(size_t tid, Data *d_data) {
-        d_data->getRoot().mBBox.expandAtomic(d_data->getUpper(tid).bbox());
-    }, mDeviceData);
+    util::cuda::lambdaKernel<<<numBlocks(mData.nodeCount[2]), mNumThreads, 0, mStream>>>(mData.nodeCount[2], PropagateUpperBBoxFunctor<BuildT>(), mDeviceData);
     cudaCheckError();
 
     // update the world-bbox in the root node
-    util::cuda::lambdaKernel<<<1, 1, 0, mStream>>>(1, [=] __device__(size_t, Data *d_data) {
-        d_data->getGrid().mWorldBBox = d_data->getRoot().mBBox.transform(d_data->map);
-    }, mDeviceData);
+    util::cuda::lambdaKernel<<<1, 1, 0, mStream>>>(1, UpdateRootWorldBBoxFunctor<BuildT>(), mDeviceData);
     cudaCheckError();
-}// PointsToGrid<BuildT>::processBBox
+}// PointsToGrid<BuildT, ResourceT>::processBBox
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-template<typename BuildT, typename PtrT, typename BufferT, typename AllocT>
+template<typename BuildT, typename PtrT, typename BufferT, typename ResourceT>
 GridHandle<BufferT>// Grid<BuildT>
 voxelsToGrid(const PtrT d_ijk, size_t voxelCount, double voxelSize, const BufferT &buffer, cudaStream_t stream)
 {
-    PointsToGrid<BuildT, AllocT> converter(voxelSize, Vec3d(0.0), stream);
+    PointsToGrid<BuildT, ResourceT> converter(voxelSize, Vec3d(0.0), stream);
     return converter.getHandle(d_ijk, voxelCount, buffer);
 }
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-template<typename PtrT, typename BufferT, typename AllocT>
+template<typename PtrT, typename BufferT, typename ResourceT>
 GridHandle<BufferT>// Grid<Point> with PointType coordinates as blind data
 pointsToGrid(const PtrT d_xyz, int pointCount, int maxPointsPerVoxel, int tolerance, int maxIterations, PointType type, const BufferT &buffer, cudaStream_t stream)
 {
-    PointsToGrid<Point, AllocT> converter(maxPointsPerVoxel, tolerance, maxIterations, Vec3d(0.0), stream);
+    PointsToGrid<Point, ResourceT> converter(maxPointsPerVoxel, tolerance, maxIterations, stream);
     converter.setPointType(type);
     return converter.getHandle(d_xyz, pointCount, buffer);
 }
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-template<typename BuildT, typename PtrT, typename BufferT, typename AllocT>
+template<typename BuildT, typename PtrT, typename BufferT, typename ResourceT>
 GridHandle<BufferT>
 pointsToGrid(std::vector<std::tuple<const PtrT,size_t,double,PointType>> vec, const BufferT &buffer, cudaStream_t stream)
 {
     std::vector<GridHandle<BufferT>> handles;
-    for (auto &p : vec) handles.push_back(pointsToGrid<BuildT, AllocT>(std::get<0>(p), std::get<1>(p), std::get<2>(p), std::get<3>(p), buffer, stream));
+    for (auto &p : vec) handles.push_back(pointsToGrid<BuildT, PtrT, BufferT, ResourceT>(std::get<0>(p), std::get<1>(p), std::get<2>(p), std::get<3>(p), buffer, stream));
     return mergeDeviceGrids(handles, stream);
 }
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-template<typename BuildT, typename PtrT, typename BufferT, typename AllocT>
+template<typename BuildT, typename PtrT, typename BufferT, typename ResourceT>
 GridHandle<BufferT>
 voxelsToGrid(std::vector<std::tuple<const PtrT,size_t,double>> vec, const BufferT &buffer, cudaStream_t stream)
 {
     std::vector<GridHandle<BufferT>> handles;
-    for (auto &p : vec) handles.push_back(voxelsToGrid<BuildT, PtrT, BufferT, AllocT>(std::get<0>(p), std::get<1>(p), std::get<2>(p), buffer, stream));
+    for (auto &p : vec) handles.push_back(voxelsToGrid<BuildT, PtrT, BufferT, ResourceT>(std::get<0>(p), std::get<1>(p), std::get<2>(p), buffer, stream));
     return mergeDeviceGrids(handles, stream);
 }
 
@@ -1237,7 +1461,7 @@ voxelsToGrid(std::vector<std::tuple<const PtrT,size_t,double>> vec, const Buffer
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-template<typename PtrT, typename BufferT = cuda::DeviceBuffer, typename AllocT = cub::CachingDeviceAllocator>
+template<typename PtrT, typename BufferT = cuda::DualDeviceBuffer, typename ResourceT = nanovdb::cuda::DeviceResource>
 [[deprecated("Use cuda::pointsToGrid instead")]]
 GridHandle<BufferT>
 cudaPointsToGrid(const PtrT dWorldPoints,
@@ -1247,24 +1471,24 @@ cudaPointsToGrid(const PtrT dWorldPoints,
                  const BufferT &buffer = BufferT(),
                  cudaStream_t stream = 0)
 {
-    return tools::cuda::pointsToGrid<PtrT, BufferT, AllocT>(dWorldPoints, pointCount, voxelSize, type, buffer, stream);
+    return tools::cuda::pointsToGrid<PtrT, BufferT, ResourceT>(dWorldPoints, pointCount, voxelSize, type, buffer, stream);
 }
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-template<typename BuildT, typename PtrT, typename BufferT = cuda::DeviceBuffer, typename AllocT = cub::CachingDeviceAllocator>
+template<typename BuildT, typename PtrT, typename BufferT = cuda::DualDeviceBuffer, typename ResourceT = nanovdb::cuda::DeviceResource>
 [[deprecated("Use cuda::pointsToGrid instead")]]
 GridHandle<BufferT>
 cudaPointsToGrid(std::vector<std::tuple<const PtrT,size_t,double,PointType>> pointSet,
                  const BufferT &buffer = BufferT(),
                  cudaStream_t stream = 0)
 {
-    return tools::cuda::pointsToGrid<BuildT, PtrT, BufferT,AllocT>(pointSet, buffer, stream);
+    return tools::cuda::pointsToGrid<BuildT, PtrT, BufferT, ResourceT>(pointSet, buffer, stream);
 }
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-template<typename BuildT, typename PtrT, typename BufferT = cuda::DeviceBuffer, typename AllocT = cub::CachingDeviceAllocator>
+template<typename BuildT, typename PtrT, typename BufferT = cuda::DualDeviceBuffer, typename ResourceT = nanovdb::cuda::DeviceResource>
 [[deprecated("Use cuda::voxelsToGrid instead")]]
 GridHandle<BufferT>
 cudaVoxelsToGrid(const PtrT dGridVoxels,
@@ -1273,21 +1497,21 @@ cudaVoxelsToGrid(const PtrT dGridVoxels,
                  const BufferT &buffer = BufferT(),
                  cudaStream_t stream = 0)
 {
-    return tools::cuda::voxelsToGrid<BuildT, PtrT, BufferT, AllocT>(dGridVoxels, voxelCount, voxelSize, buffer, stream);
+    return tools::cuda::voxelsToGrid<BuildT, PtrT, BufferT, ResourceT>(dGridVoxels, voxelCount, voxelSize, buffer, stream);
 }
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-template<typename BuildT, typename PtrT, typename BufferT = cuda::DeviceBuffer, typename AllocT = cub::CachingDeviceAllocator>
+template<typename BuildT, typename PtrT, typename BufferT = cuda::DualDeviceBuffer, typename ResourceT = nanovdb::cuda::DeviceResource>
 [[deprecated("Use cuda::voxelsToGrid instead")]]
 GridHandle<BufferT>
 cudaVoxelsToGrid(std::vector<std::tuple<const PtrT, size_t, double>> pointSet,
                  const BufferT &buffer = BufferT(),
                  cudaStream_t stream = 0)
 {
-    return tools::cuda::voxelsToGrid<BuildT, PtrT, BufferT, AllocT>(pointSet, buffer, stream);
+    return tools::cuda::voxelsToGrid<BuildT, PtrT, BufferT, ResourceT>(pointSet, buffer, stream);
 }
 
 }// namespace nanovdb
 
-#endif // NVIDIA_TOOLS_CUDA_POINTSTOGRID_CUH_HAS_BEEN_INCLUDED
+#endif // NANOVDB_TOOLS_CUDA_POINTSTOGRID_CUH_HAS_BEEN_INCLUDED

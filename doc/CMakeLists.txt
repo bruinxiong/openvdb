@@ -1,5 +1,5 @@
 # Copyright Contributors to the OpenVDB Project
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 #[=======================================================================[
 
@@ -7,7 +7,7 @@
 
 #]=======================================================================]
 
-cmake_minimum_required(VERSION 3.18)
+cmake_minimum_required(VERSION 3.24)
 project(OpenVDBDocs LANGUAGES NONE)
 
 include(GNUInstallDirs)
@@ -25,8 +25,16 @@ option(OPENVDB_DOXYGEN_NANOVDB "Build NanoVDB documentation" ON)
 option(OPENVDB_DOXYGEN_INTERNAL [=[
 Enable documentation of methods and classes which have been explicitly marked as internal
 ]=] OFF)
+# When enabled, Doxygen's WARN_AS_ERROR=FAIL_ON_WARNINGS makes any warning fail
+# the docs build (it still generates the docs and writes the full warning log
+# first, then exits non-zero). CI turns this ON -- see .github/workflows/docs.yml
+# -- so net-new doc warnings fail the PR that introduces them. Defaults OFF so a
+# local doc build isn't blocked by a stray warning from a different Doxygen
+# version; pass -DOPENVDB_DOXYGEN_WARN_AS_ERROR=ON to gate locally too.
+option(OPENVDB_DOXYGEN_WARN_AS_ERROR
+  "Treat Doxygen warnings as errors" OFF)
 
-find_package(Doxygen REQUIRED doxygen)
+find_package(Doxygen 1.0...<1.15.0 REQUIRED doxygen)
 if(MINIMUM_DOXYGEN_VERSION)
   if(DOXYGEN_VERSION VERSION_LESS MINIMUM_DOXYGEN_VERSION)
     message(WARNING "The doxygen-config doxyfile has been generated with version "
@@ -41,11 +49,11 @@ set(DOXY_FILES
   openvdb/openvdb/io
   openvdb/openvdb/math
   openvdb/openvdb/points
-  openvdb/openvdb/points/impl
-  openvdb/openvdb/python/pyopenvdb.h
+  openvdb/openvdb/thread
   openvdb/openvdb/tools
   openvdb/openvdb/tree
   openvdb/openvdb/util
+  ext/imath/openvdb/math
   doc/build.txt
   doc/changes.txt
   doc/codingstyle.txt
@@ -57,27 +65,93 @@ set(DOXY_FILES
   doc/points.txt
   doc/python.txt)
 
+if(OPENVDB_DOXYGEN_INTERNAL)
+  list(APPEND
+    openvdb/openvdb/points/impl
+    openvdb/openvdb/tools/impl)
+endif()
+
+if(NOT OPENVDB_DOXYGEN_INTERNAL)
+  # Hide implementation-detail symbols in the lowercase `internal` namespaces
+  # (the project convention for non-public helpers). Note: do NOT add a
+  # capital-I "*Internal*" glob here -- it also matches the public
+  # tree::InternalNode (and nanovdb::InternalNode) class, silently dropping it
+  # from the docs and breaking every \link to it (e.g. InternalNode::childCount
+  # in doc/changes.txt) while its RootNode/LeafNode siblings resolve fine.
+  set(DOXYGEN_EXCLUDE_SYMBOLS
+    "*internal*")
+endif()
+
 set(DOXYGEN_PROJECT_NAME "OpenVDB")
+set(DOXYGEN_PROJECT_LOGO "${CMAKE_CURRENT_SOURCE_DIR}/img/openvdb_logo.png")
 set(DOXYGEN_PROJECT_NUMBER "${OpenVDB_VERSION}")
 set(DOXYGEN_PROJECT_BRIEF "")
 set(DOXYGEN_FILE_PATTERNS *.h *h.in) # headers only
 set(DOXYGEN_EXTENSION_MAPPING .in=C) # parse CMake config headers as C
-set(DOXYGEN_IMAGE_PATH "doc/img")
+set(DOXYGEN_IMAGE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/img")
 set(DOXYGEN_RECURSIVE NO)
-set(DOXYGEN_QUIET YES)
+set(DOXYGEN_NUM_PROC_THREADS 0) # detects from system
+
+# Enable \snippet resolution against the on-disk example sources. Paths in
+# \snippet directives are resolved relative to EXAMPLE_PATH, so referring to
+# `nanovdb/nanovdb/examples/ex_xxx/yyy.cc` from a doc page works as written.
+set(DOXYGEN_EXAMPLE_PATH "${CMAKE_SOURCE_DIR}")
+set(DOXYGEN_EXAMPLE_PATTERNS *.cc *.cpp *.cu *.cuh *.h *.txt)
+set(DOXYGEN_EXAMPLE_RECURSIVE YES)
+
+# Always capture Doxygen warnings to a logfile so CI can publish it as an
+# artifact and contributors can see exactly what's broken.
+set(DOXYGEN_WARN_LOGFILE "${CMAKE_CURRENT_BINARY_DIR}/doxygen.warnings.log")
+if(OPENVDB_DOXYGEN_WARN_AS_ERROR)
+  # FAIL_ON_WARNINGS_PRINT keeps generating docs but exits non-zero at the end
+  # if any warning was generated, and importantly prints them at the end of
+  # the generartion step. Requires Doxygen >= 1.9.7.
+  set(DOXYGEN_WARN_AS_ERROR FAIL_ON_WARNINGS_PRINT)
+  # Don't suppress messages so contributors can see warnings during the build.
+  set(DOXYGEN_QUIET NO)
+else()
+  set(DOXYGEN_QUIET YES)
+endif()
 
 set(DOXYGEN_GENERATE_HTML YES)
 set(DOXYGEN_GENERATE_MAN NO)
 set(DOXYGEN_GENERATE_LATEX NO)
 set(DOXYGEN_GENERATE_TODOLIST NO)
-
-set(DOXYGEN_HTML_COLORSTYLE_HUE 4)
-set(DOXYGEN_HTML_COLORSTYLE_SAT 222)
 set(DOXYGEN_HTML_TIMESTAMP NO) # for simpler website diffs
+
+# Render math formulas via MathJax instead of LaTeX -> PNG. This removes the
+# entire `latex`/`dvips`/`gs` toolchain dependency from both local doc builds
+# and CI (see .github/workflows/docs.yml), eliminates a class of cross-platform
+# install pain, and produces crisper, selectable math in the rendered HTML.
+set(DOXYGEN_USE_MATHJAX YES)
+set(DOXYGEN_MATHJAX_VERSION MathJax_3) # default JS bundle loaded from a CDN
 
 set(DOXYGEN_EXTRACT_ALL YES)
 set(DOXYGEN_EXTRACT_STATIC YES)
 set(DOXYGEN_EXTRACT_LOCAL_CLASSES NO)
+
+# Configuration for doxygen-awesome-css
+# {
+set(DOXYGEN_HTML_COLORSTYLE_HUE 209)
+set(DOXYGEN_HTML_COLORSTYLE_SAT 255)
+set(DOXYGEN_HTML_COLORSTYLE_GAMMA 113)
+set(DOXYGEN_GENERATE_TREEVIEW YES)
+set(DOXYGEN_DISABLE_INDEX NO)
+set(DOXYGEN_FULL_SIDEBAR NO)
+set(DOXYGEN_HTML_HEADER
+  "${CMAKE_CURRENT_SOURCE_DIR}/header.html")
+set(DOXYGEN_HTML_EXTRA_STYLESHEET
+  "${CMAKE_SOURCE_DIR}/ext/doxygen-awesome/doxygen-awesome.css"
+  "${CMAKE_SOURCE_DIR}/ext/doxygen-awesome/doxygen-awesome-sidebar-only.css"
+  "${CMAKE_SOURCE_DIR}/ext/doxygen-awesome/doxygen-awesome-sidebar-only-darkmode-toggle.css"
+  "${CMAKE_CURRENT_SOURCE_DIR}/openvdb.css")
+set(DOXYGEN_HTML_EXTRA_FILES
+  "${CMAKE_SOURCE_DIR}/ext/doxygen-awesome/doxygen-awesome-paragraph-link.js"
+  "${CMAKE_SOURCE_DIR}/ext/doxygen-awesome/doxygen-awesome-fragment-copy-button.js"
+  "${CMAKE_SOURCE_DIR}/ext/doxygen-awesome/doxygen-awesome-darkmode-toggle.js")
+set(DOXYGEN_HTML_COPY_CLIPBOARD NO) # required with Doxygen >= 1.10.0
+set(DOXYGEN_HTML_COLORSTYLE LIGHT) # required with Doxygen >= 1.9.5
+# }
 
 # Allow for root directory paths to be listed (e.g. openvdb/io/File.h)
 # Rather than just the file names (e.g. File.h). This makes it far
@@ -109,12 +183,13 @@ set(DOXYGEN_HIDE_SCOPE_NAMES YES)
 set(DOXYGEN_INLINE_INHERITED_MEMB YES)
 set(DOXYGEN_MACRO_EXPANSION YES)
 # @todo use dot with class diagrams for relevant classes
+set(DOXYGEN_HAVE_DOT NO)
+set(DOXYGEN_CLASS_GRAPH NO)
 set(DOXYGEN_CLASS_DIAGRAMS NO)
 
-
 set(DOXYGEN_ALIASES
-  [[ijk="(<i>i</i>,&nbsp;<i>j</i>,&nbsp;<i>k</i>)"]]
-  [[xyz="(<i>x</i>,&nbsp;<i>y</i>,&nbsp;<i>z</i>)"]]
+  [[ijk="(<i>i</i>,&nbsp\;<i>j</i>,&nbsp\;<i>k</i>)"]]
+  [[xyz="(<i>x</i>,&nbsp\;<i>y</i>,&nbsp\;<i>z</i>)"]]
   [[const="<tt>const</tt>"]]
   "\"vdbnamespace=openvdb::v${OpenVDB_MAJOR_VERSION}_${OpenVDB_MINOR_VERSION}\""
   [["hunamespace=houdini_utils"]]
@@ -142,12 +217,18 @@ set(DOXYGEN_PREDEFINED
   "OPENVDB_VERSION_NAME=v${OpenVDB_MAJOR_VERSION}_${OpenVDB_MINOR_VERSION}"
   "OPENVDB_ABI_VERSION_NUMBER=${OpenVDB_MAJOR_VERSION}"
   [[__declspec(x):= __attribute__(x):=]]
+  # Strip the symbol-visibility/export macro so Doxygen doesn't fold it into a
+  # declaration's name. Doxygen tolerates `class OPENVDB_API X` but mis-parses
+  # `enum OPENVDB_API X` (e.g. half::FromBitsTag in ext/imath/.../Half.h),
+  # reporting the enum as a documented-but-undeclared symbol.
+  "OPENVDB_API="
   # Replace the deprecated macros with doxygen deprecated comments. This ensures
   # that every bit of deprecated C++ is listed in the doxygen deprecated list,
   # even if it was not properly tagged
   [["OPENVDB_DEPRECATED=/** \deprecated */"]]
   [["OPENVDB_DEPRECATED_MESSAGE(x)=/** \deprecated x */"]]
-  "OPENVDB_USE_LOG4CPLUS=")
+  "OPENVDB_USE_LOG4CPLUS="
+  "OPENVDB_UBSAN_SUPPRESS=")
 
 set(DOXYGEN_ENABLED_SECTIONS "")
 
@@ -189,9 +270,9 @@ if(OPENVDB_DOXYGEN_HOUDINI)
   list(APPEND DOXY_FILES
     doc/houdini.txt
     openvdb_houdini/openvdb_houdini/AttributeTransferUtil.h
-    openvdb_houdini/openvdb_houdini/GEO_PrimVDB.h
+    openvdb_houdini/openvdb_houdini/reference/GEO_PrimVDB.h
+    openvdb_houdini/openvdb_houdini/reference/GU_PrimVDB.h
     openvdb_houdini/openvdb_houdini/GT_GEOPrimCollectVDB.h
-    openvdb_houdini/openvdb_houdini/GU_PrimVDB.h
     openvdb_houdini/openvdb_houdini/GU_VDBPointTools.h
     openvdb_houdini/openvdb_houdini/GeometryUtil.h
     openvdb_houdini/openvdb_houdini/ParmFactory.h
@@ -204,7 +285,9 @@ if(OPENVDB_DOXYGEN_HOUDINI)
 endif()
 
 if(OPENVDB_DOXYGEN_AX)
-  set(DOXYGEN_EXTRA_PACKAGES amsmath) # for math formatting
+  # AX docs use @f$ inline and @f[ block math. Formula font size also applies
+  # under MathJax (set above). The amsmath package the AX docs assume is
+  # bundled by default in MathJax v3, so no extra extensions are required.
   set(DOXYGEN_FORMULA_FONTSIZE 14)
   list(APPEND DOXYGEN_ENABLED_SECTIONS "OPENVDB_AX")
 
@@ -220,8 +303,7 @@ if(OPENVDB_DOXYGEN_AX)
     openvdb_ax/openvdb_ax/compiler
     openvdb_ax/openvdb_ax/grammar
     openvdb_ax/openvdb_ax/grammar/generated
-    openvdb_ax/openvdb_ax/math
-    openvdb_ax/openvdb_ax/test)
+    openvdb_ax/openvdb_ax/math)
 endif()
 
 if(OPENVDB_DOXYGEN_NANOVDB)
@@ -234,8 +316,13 @@ if(OPENVDB_DOXYGEN_NANOVDB)
     doc/nanovdb/HowToBuild.md
     doc/nanovdb/HelloWorld.md
     nanovdb/nanovdb
+    nanovdb/nanovdb/cuda
+    nanovdb/nanovdb/io
+    nanovdb/nanovdb/math
+    nanovdb/nanovdb/putil
+    nanovdb/nanovdb/tools
     nanovdb/nanovdb/util
-    nanovdb/nanovdb/examples/benchmark
+    nanovdb/nanovdb/util/cuda
     nanovdb/nanovdb/examples/ex_bump_pool_buffer
     nanovdb/nanovdb/examples/ex_collide_level_set
     nanovdb/nanovdb/examples/ex_make_custom_nanovdb
@@ -254,8 +341,7 @@ if(OPENVDB_DOXYGEN_NANOVDB)
     nanovdb/nanovdb/examples/ex_read_nanovdb_sphere_accessor_cuda
     nanovdb/nanovdb/examples/ex_util
     nanovdb/nanovdb/examples/ex_vox_to_nanovdb
-    nanovdb/nanovdb/examples/ex_write_nanovdb_grids
-    nanovdb/nanovdb/unittest)
+    nanovdb/nanovdb/examples/ex_write_nanovdb_grids)
 endif()
 
 set(DOXYGEN_VERBATIM_VARS DOXYGEN_ALIASES DOXYGEN_PREDEFINED)

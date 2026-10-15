@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 //
 /// @file ValueTransformer.h
 ///
@@ -42,7 +42,7 @@ OPENVDB_USE_VERSION_NAMESPACE
 namespace OPENVDB_VERSION_NAME {
 namespace tools {
 
-/// Iterate over a grid and at each step call @c op(iter).
+/// @brief Iterate over a grid and at each step call @c op(iter).
 /// @param iter      an iterator over a grid or its tree (@c Grid::ValueOnCIter,
 ///                  @c Tree::NodeIter, etc.)
 /// @param op        a functor of the form <tt>void op(const IterT&)</tt>, where @c IterT is
@@ -94,7 +94,7 @@ inline void foreach(const IterT& iter, const XformOp& op,
     bool threaded = true, bool shareOp = true);
 
 
-/// Iterate over a grid and at each step call <tt>op(iter, accessor)</tt> to
+/// @brief Iterate over a grid and at each step call <tt>op(iter, accessor)</tt> to
 /// populate (via the accessor) the given output grid, whose @c ValueType
 /// need not be the same as the input grid's.
 /// @param inIter    a non-<tt>const</tt> or (preferably) @c const iterator over an
@@ -135,12 +135,14 @@ inline void foreach(const IterT& iter, const XformOp& op,
 /// consider using @c tbb::parallel_for() or @c tbb::parallel_reduce() in conjunction
 /// with a tree::IteratorRange that wraps a grid or tree iterator.
 template<typename InIterT, typename OutGridT, typename XformOp>
-inline void transformValues(const InIterT& inIter, OutGridT& outGrid,
+inline OPENVDB_UBSAN_SUPPRESS("undefined")
+void transformValues(const InIterT& inIter, OutGridT& outGrid,
     XformOp& op, bool threaded = true, bool shareOp = true,
     MergePolicy merge = MERGE_ACTIVE_STATES);
 
 template<typename InIterT, typename OutGridT, typename XformOp>
-inline void transformValues(const InIterT& inIter, OutGridT& outGrid,
+inline OPENVDB_UBSAN_SUPPRESS("undefined")
+void transformValues(const InIterT& inIter, OutGridT& outGrid,
     const XformOp& op, bool threaded = true, bool shareOp = true,
     MergePolicy merge = MERGE_ACTIVE_STATES);
 
@@ -235,14 +237,18 @@ template<typename ValueType>
 struct MinOp {
     const ValueType val;
     MinOp(const ValueType& v): val(v) {}
-    inline void operator()(ValueType& v) const { v = std::min<ValueType>(v, val); }
+    inline void operator()(ValueType& v) const {
+        if (math::cwiseLessThan(val, v)) v = val;
+    }
 };
 
 template<typename ValueType>
 struct MaxOp {
     const ValueType val;
     MaxOp(const ValueType& v): val(v) {}
-    inline void operator()(ValueType& v) const { v = std::max<ValueType>(v, val); }
+    inline void operator()(ValueType& v) const {
+        if (math::cwiseGreaterThan(val, v)) v = val;
+    }
 };
 
 template<typename ValueType>
@@ -585,8 +591,8 @@ private:
 
 
 template<typename InIterT, typename OutGridT, typename XformOp>
-inline void
-transformValues(const InIterT& inIter, OutGridT& outGrid, XformOp& op,
+inline OPENVDB_UBSAN_SUPPRESS("undefined")
+void transformValues(const InIterT& inIter, OutGridT& outGrid, XformOp& op,
     bool threaded, bool shared, MergePolicy merge)
 {
     using Adapter = TreeAdapter<OutGridT>;
@@ -603,8 +609,8 @@ transformValues(const InIterT& inIter, OutGridT& outGrid, XformOp& op,
 }
 
 template<typename InIterT, typename OutGridT, typename XformOp>
-inline void
-transformValues(const InIterT& inIter, OutGridT& outGrid, const XformOp& op,
+inline OPENVDB_UBSAN_SUPPRESS("undefined")
+void transformValues(const InIterT& inIter, OutGridT& outGrid, const XformOp& op,
     bool threaded, bool /*share*/, MergePolicy merge)
 {
     using Adapter = TreeAdapter<OutGridT>;

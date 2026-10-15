@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /*!
     \file nanovdb/tools/GridStats.h
@@ -18,6 +18,7 @@
 #include <nanovdb/NanoVDB.h>
 
 #ifdef NANOVDB_USE_TBB
+#include <memory>
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_reduce.h>
 #endif

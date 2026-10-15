@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 //
 /// @file ParmFactory.h
 /// @author FX R&D OpenVDB team
@@ -491,8 +491,8 @@ public:
     /// @brief Specify (@e key, @e value) pairs of spare data for this operator.
     /// @details If a key already exists, its corresponding value will be
     /// overwritten with the new value.
-    /// @sa @link addOperatorSpareData() addOperatorSpareData@endlink,
-    ///     @link getOperatorSpareData() getOperatorSpareData@endlink
+    /// @sa @link houdini_utils::addOperatorSpareData() addOperatorSpareData@endlink,
+    ///     @link houdini_utils::getOperatorSpareData() getOperatorSpareData@endlink
     OpFactory& addSpareData(const SpareDataMap&);
 
 protected:

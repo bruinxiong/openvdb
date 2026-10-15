@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 //
 /// @file AttributeTransferUtil.h
 /// @author FX R&D Simulation team
@@ -1572,18 +1572,6 @@ transferPrimitiveAttributes(
 
         }
     }
-}
-
-template<class GridType>
-void
-transferPrimitiveAttributes(
-    const GU_Detail& sourceGeo,
-    GU_Detail& targetGeo,
-    GridType& indexGrid,
-    Interrupter& boss,
-    const GA_PrimitiveGroup* primitives = nullptr)
-{
-    transferPrimitiveAttributes(sourceGeo, targetGeo, indexGrid, boss.interrupter(), primitives);
 }
 
 } // namespace openvdb_houdini

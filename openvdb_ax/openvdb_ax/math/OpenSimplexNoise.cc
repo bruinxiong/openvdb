@@ -1,5 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
+
+/// @cond OPENVDB_DOCS_INTERNAL
 
 /// @file math/OpenSimplexNoise.cc
 
@@ -713,3 +715,5 @@ template OPENVDB_AX_API double OSNoise::extrapolate(const OSNoise::inttype xsb, 
 template OPENVDB_AX_API double OSNoise::eval(const double x, const double y, const double z) const;
 
 } // namespace OSN
+
+/// @endcond

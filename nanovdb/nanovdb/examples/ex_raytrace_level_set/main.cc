@@ -1,17 +1,12 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
 #include <iostream>
 #include <nanovdb/io/IO.h>
 #include <nanovdb/tools/CreatePrimitives.h>
-#include <nanovdb/cuda/DeviceBuffer.h>
 
-#if defined(NANOVDB_USE_CUDA)
-using BufferT = nanovdb::cuda::DeviceBuffer;
-#else
-using BufferT = nanovdb::HostBuffer;
-#endif
+using BufferT = nanovdb::HostBuffer; // the handle lives in host memory; the CUDA side deep-copies it to the device
 
 extern void runNanoVDB(nanovdb::GridHandle<BufferT>& handle, int numIterations, int width, int height, BufferT& imageBuffer);
 #if defined(NANOVDB_USE_OPENVDB)
@@ -33,12 +28,11 @@ int main(int ac, char** av)
             throw std::runtime_error("Grid must be a level set");
         }
 
-        const int numIterations = 50;
+        const int numIterations = 200;
 
         const int width = 1024;
         const int height = 1024;
-        BufferT   imageBuffer;
-        imageBuffer.init(width * height * sizeof(float));
+        BufferT   imageBuffer(width * height * sizeof(float));
 
         runNanoVDB(handle, numIterations, width, height, imageBuffer);
 #if defined(NANOVDB_USE_OPENVDB)

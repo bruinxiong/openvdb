@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /// @file tree/ValueAccessor.h
 ///
@@ -890,18 +890,6 @@ public:
         }
     }
 
-public:
-    // Backwards compatible support. Use NodeTypeAtLevel<> instead
-    using NodeT0 OPENVDB_DEPRECATED_MESSAGE("Use NodeTypeAtLevel<0>") =
-        typename std::conditional<(NumCacheLevels > 0), NodeTypeAtLevel<0>, void>::type;
-    using NodeT1 OPENVDB_DEPRECATED_MESSAGE("Use NodeTypeAtLevel<1>") =
-        typename std::conditional<(NumCacheLevels > 1), NodeTypeAtLevel<1>, void>::type;
-    using NodeT2 OPENVDB_DEPRECATED_MESSAGE("Use NodeTypeAtLevel<2>") =
-        typename std::conditional<(NumCacheLevels > 2), NodeTypeAtLevel<2>, void>::type;
-    /// @brief Return the number of cache levels employed by this ValueAccessor
-    OPENVDB_DEPRECATED_MESSAGE("Use the static NumCacheLevels constant")
-    static constexpr Index numCacheLevels() { return NumCacheLevels; }
-
 protected:
     // Allow nodes to insert themselves into the cache.
     template<typename> friend class RootNode;
@@ -1008,10 +996,12 @@ private:
     {
         return this->evalFirstPred([&](const auto Idx) -> bool
             {
-                if constexpr(Idx < Start)             return false;
-                if constexpr(Idx > NumCacheLevels+1)  return false;
-                using NodeType = typename NodeLevelList::template Get<Idx>;
-                return this->isHashed<NodeType>(xyz);
+                if constexpr(Idx < Start)                  return false;
+                else if constexpr(static_cast<ptrdiff_t>(Idx) > static_cast<ptrdiff_t>(NumCacheLevels) + 1)  return false;
+                else {
+                    using NodeType = typename NodeLevelList::template Get<Idx>;
+                    return this->isHashed<NodeType>(xyz);
+                }
             }, op);
     }
 

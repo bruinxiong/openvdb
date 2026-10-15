@@ -7,8 +7,9 @@ A lightweight GPU friendly version of VDB initially targeting rendering applicat
 * [Frequently asked questions](../../doc/nanovdb/FAQ.md)
 * [Source tree](../../doc/nanovdb/SourceTree.md)
 * [Examples](../../doc/nanovdb/HelloWorld.md)
+* [TEACHME — learn NanoVDB by prompting an LLM coding agent](../../doc/nanovdb/TEACHME/README.md)
 
 ### Copyright Contributors to the OpenVDB Project
-### SPDX-License-Identifier: MPL-2.0
+### SPDX-License-Identifier: Apache-2.0
 
 [![CircleCI](https://circleci.com/gh/NVIDIA-Omniverse/NanoVDB.svg?style=svg&circle-token=6c3b9bb166841033a0e0c1a9ee5ac49f73d89152)](https://circleci.com/gh/NVIDIA-Omniverse/NanoVDB)

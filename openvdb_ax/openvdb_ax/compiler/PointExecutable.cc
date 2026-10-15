@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /// @file compiler/PointExecutable.cc
 
@@ -27,6 +27,8 @@
 #include <openvdb/points/PointMask.h>
 #include <openvdb/points/PointMove.h>
 #include <openvdb/points/PointDelete.h>
+
+#include <llvm/Config/llvm-config.h>
 
 namespace openvdb {
 OPENVDB_USE_VERSION_NAMESPACE
@@ -158,8 +160,8 @@ using KernelValueFunctionPtr = std::add_pointer<codegen::PointKernelAttributeArr
 using KernelBufferRangeFunctionPtr = std::add_pointer<codegen::PointKernelBufferRange::Signature>::type;
 using PointLeafLocalData = codegen::codegen_internal::PointLeafLocalData;
 
-#ifndef NDEBUG
-inline bool supported(const ast::tokens::CoreType type)
+#ifdef OPENVDB_ENABLE_ASSERTS
+[[maybe_unused]] inline bool supported(const ast::tokens::CoreType type)
 {
     switch (type) {
         case ast::tokens::BOOL    : return true;
@@ -360,7 +362,6 @@ struct PointFunctionArguments
         // @todo  if the array is shared we should probably make it unique?
 
         if (mData.mUseBufferKernel) {
-            const_cast<points::AttributeArray&>(array).loadData();
             const char* data = array.constDataAsByteArray();
             void* ptr = static_cast<void*>(const_cast<char*>(data));
             mHandlesOrBuffers.emplace_back(ptr);
@@ -385,14 +386,13 @@ struct PointFunctionArguments
         array.expand();
 
         if (mData.mUseBufferKernel) {
-            array.loadData();
             const char* data = array.constDataAsByteArray();
             void* ptr = static_cast<void*>(const_cast<char*>(data));
             mHandlesOrBuffers.emplace_back(ptr);
             const codegen::Codec* codec =
                 codegen::getCodec(ast::tokens::tokenFromTypeString(array.valueType()), array.codecType());
             if (codec) flag |= codec->flag();
-            OPENVDB_ASSERT(array.isDataLoaded() && !array.isUniform());
+            OPENVDB_ASSERT(!array.isUniform());
         }
         else {
             typename WriteHandle<ValueT>::UniquePtr handle(new WriteHandle<ValueT>(leaf, Index(pos)));
@@ -743,20 +743,31 @@ bool checkCodecs(const points::AttributeSet::Descriptor& desc,
 
 } // anonymous namespace
 
-PointExecutable::PointExecutable(const std::shared_ptr<const llvm::LLVMContext>& context,
-                const std::shared_ptr<const llvm::ExecutionEngine>& engine,
-                const AttributeRegistry::ConstPtr& attributeRegistry,
-                const CustomData::ConstPtr& customData,
-                const std::unordered_map<std::string, uint64_t>& functions,
-                const ast::Tree& ast)
+PointExecutable::PointExecutable(
+#if LLVM_VERSION_MAJOR <= 15
+        const std::shared_ptr<const llvm::LLVMContext>& context,
+        const std::shared_ptr<const llvm::ExecutionEngine>& engine,
+#else
+        const std::shared_ptr<const llvm::orc::LLJIT>& engine,
+#endif
+        const AttributeRegistry::ConstPtr& attributeRegistry,
+        const CustomData::ConstPtr& customData,
+        const std::unordered_map<std::string, uint64_t>& functions,
+        const ast::Tree& ast)
+#if LLVM_VERSION_MAJOR <= 15
     : mContext(context)
     , mExecutionEngine(engine)
+#else
+    : mExecutionEngine(engine)
+#endif
     , mAttributeRegistry(attributeRegistry)
     , mCustomData(customData)
     , mFunctionAddresses(functions)
     , mSettings(new Settings<false>)
 {
+#if LLVM_VERSION_MAJOR <= 15
     OPENVDB_ASSERT(mContext);
+#endif
     OPENVDB_ASSERT(mExecutionEngine);
     OPENVDB_ASSERT(mAttributeRegistry);
 
@@ -770,8 +781,12 @@ PointExecutable::PointExecutable(const std::shared_ptr<const llvm::LLVMContext>&
 }
 
 PointExecutable::PointExecutable(const PointExecutable& other)
+#if LLVM_VERSION_MAJOR <= 15
     : mContext(other.mContext)
     , mExecutionEngine(other.mExecutionEngine)
+#else
+    : mExecutionEngine(other.mExecutionEngine)
+#endif
     , mAttributeRegistry(other.mAttributeRegistry)
     , mCustomData(other.mCustomData)
     , mFunctionAddresses(other.mFunctionAddresses)

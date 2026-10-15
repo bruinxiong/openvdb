@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /// @file   PointIndexGrid.h
 ///
@@ -1491,7 +1491,8 @@ public:
 
 
     Index64 memUsage() const;
-    Index64 memUsageIfLoaded() const;
+    OPENVDB_DEPRECATED_MESSAGE("Use memUsage() instead. This method is deprecated and will be removed. Delayed loading is no longer supported.")
+    Index64 memUsageIfLoaded() const { return memUsage(); }
 
 
     ////////////////////////////////////////
@@ -1728,6 +1729,15 @@ PointIndexLeafNode<T, Log2Dim>::readBuffers(std::istream& is, bool fromHalf)
 
     mIndices.resize(size_t(numIndices));
     is.read(reinterpret_cast<char*>(mIndices.data()), numIndices * sizeof(T));
+
+    // Reserved for future use
+    Index64 auxDataBytes = Index64(0);
+    is.read(reinterpret_cast<char*>(&auxDataBytes), sizeof(Index64));
+    if (auxDataBytes > 0) {
+        // For now, read and discard any auxiliary data.
+        std::unique_ptr<char[]> auxData{new char[auxDataBytes]};
+        is.read(auxData.get(), auxDataBytes);
+    }
 }
 
 
@@ -1787,13 +1797,6 @@ inline Index64
 PointIndexLeafNode<T, Log2Dim>::memUsage() const
 {
     return BaseLeaf::memUsage() + Index64((sizeof(T)*mIndices.capacity()) + sizeof(mIndices));
-}
-
-template<typename T, Index Log2Dim>
-inline Index64
-PointIndexLeafNode<T, Log2Dim>::memUsageIfLoaded() const
-{
-    return BaseLeaf::memUsageIfLoaded() + Index64((sizeof(T)*mIndices.capacity()) + sizeof(mIndices));
 }
 
 } // namespace tools

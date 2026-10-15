@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /*
  * Copyright (c)
@@ -14,9 +14,11 @@
 #include <UT/UT_ErrorManager.h>
 #include <UT/UT_IOTable.h>
 #include <UT/UT_IStream.h>
+#include <UT/UT_OFStream.h>
 #include <UT/UT_Version.h>
 
 #include <FS/FS_IStreamDevice.h>
+#include <FS/FS_WriterStream.h>
 #include <GA/GA_Stat.h>
 #include <GU/GU_Detail.h>
 #include <SOP/SOP_Node.h>
@@ -106,7 +108,7 @@ GEO_VDBTranslator::fileStat(const char *filename, GA_Stat &stat, uint /*level*/)
     try {
         openvdb::io::File file(filename);
 
-        file.open(/*delayLoad*/false);
+        file.open();
 
         int             nprim = 0;
         UT_BoundingBox  bbox;
@@ -202,7 +204,7 @@ GEO_VDBTranslator::fileLoad(GEO_Detail *geogdp, UT_IStream &is, bool /*ate_magic
 
     try {
         // Create and open a VDB file, but don't read any grids yet.
-        openvdb::io::Stream file(*stdstream, /*delayLoad*/false);
+        openvdb::io::Stream file(*stdstream);
 
         // Read the file-level metadata into global attributes.
         openvdb::MetaMap::Ptr fileMetadata = file.getMetadata();
@@ -306,6 +308,16 @@ GEO_VDBTranslator::fileSave(const GEO_Detail *geogdp, std::ostream &os)
 GA_Detail::IOStatus
 GEO_VDBTranslator::fileSaveToFile(const GEO_Detail *geogdp, const char *fname)
 {
+    // When HOUDINI_VDB_FORCE_STREAM_SAVE is enabled, force saving via a stream
+    // that will NOT save grid offsets, disabling the ability to partial
+    // reading on the saved files. This is for reported performance issues with
+    // Qumulo file systems, that apparently Isilon file systems do not suffer
+    // from.
+    if (UT_EnvControl::getInt(ENV_HOUDINI_VDB_FORCE_STREAM_SAVE)) {
+        FS_WriterStream os(fname);
+        return fileSaveVDB<openvdb::io::Stream, std::ostream &>(geogdp, *os.getStream());
+    }
+
     // Saving via io::File will save grid offsets that allow for partial
     // reading.
     return fileSaveVDB<openvdb::io::File, const char *>(geogdp, fname);

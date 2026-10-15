@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 //
 /// @file tree/TreeIterator.h
 
@@ -1316,7 +1316,6 @@ public:
 
     /// @brief Split constructor used by tbb (should rarely be called directly)
     /// @param other IteratorRange to be split
-    /// @param  tbb::split Dummy class used to create a unique signature for this constructor
     IteratorRange(IteratorRange& other, tbb::split):
         mIter(other.mIter),
         mGrainSize(other.mGrainSize),

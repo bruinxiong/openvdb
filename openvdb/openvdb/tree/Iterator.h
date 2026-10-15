@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 //
 /// @file tree/Iterator.h
 ///
@@ -83,7 +83,7 @@ public:
     /// @details If this iterator is pointing to a child node, then the current item
     /// in the parent node's table is required to be inactive.  In that case,
     /// this method has no effect.
-    void setValueOff() const { parent().mValueMask.setOff(this->pos()); }
+    void setValueOff() const { parent().setValueMask(this->pos(), false); }
 
     /// Return the coordinates of the item to which this iterator is pointing.
     Coord getCoord() const { return parent().offsetToGlobalCoord(this->pos()); }

@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /// @file codegen/FunctionRegistry.h
 ///
@@ -19,6 +19,12 @@
 #include <openvdb/version.h>
 
 #include <unordered_map>
+
+/// @cond OPENVDB_DOCS_INTERNAL
+namespace llvm {
+class LLVMContext;
+}
+/// @endcond
 
 namespace openvdb {
 OPENVDB_USE_VERSION_NAMESPACE
@@ -129,6 +135,22 @@ public:
 private:
     RegistryMap mMap;
 };
+
+namespace internal
+{
+
+OPENVDB_AX_API void
+InsertMappedFunctionRegistry(
+    llvm::LLVMContext* CPtr,
+    FunctionRegistry* reg,
+    const FunctionOptions& opts);
+
+OPENVDB_AX_API std::pair<FunctionRegistry*, FunctionOptions>
+GetMappedFunctionRegistry(llvm::LLVMContext* CPtr);
+
+OPENVDB_AX_API bool RemoveMappedFunctionRegistry(llvm::LLVMContext* CPtr);
+
+}
 
 } // namespace codegen
 } // namespace ax

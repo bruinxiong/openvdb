@@ -1,17 +1,12 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
 #include <iostream>
 #include <nanovdb/io/IO.h>
 #include <nanovdb/tools/CreatePrimitives.h>
-#include <nanovdb/cuda/DeviceBuffer.h>
 
-#if defined(NANOVDB_USE_CUDA)
-using BufferT = nanovdb::cuda::DeviceBuffer;
-#else
-using BufferT = nanovdb::HostBuffer;
-#endif
+using BufferT = nanovdb::HostBuffer; // the handle lives in host memory; the CUDA side deep-copies it to the device
 
 extern void runNanoVDB(nanovdb::GridHandle<BufferT>& handle, int numIterations, int numPoints, BufferT& positionBuffer, BufferT& velocityBuffer);
 #if defined(NANOVDB_USE_OPENVDB)
@@ -37,10 +32,8 @@ int main(int ac, char** av)
 
         const int numPoints = 10000000;
 
-        BufferT positionBuffer;
-        positionBuffer.init(numPoints * sizeof(float) * 3);
-        BufferT velocityBuffer;
-        velocityBuffer.init(numPoints * sizeof(float) * 3);
+        BufferT positionBuffer(numPoints * sizeof(float) * 3);
+        BufferT velocityBuffer(numPoints * sizeof(float) * 3);
 
         runNanoVDB(handle, numIterations, numPoints, positionBuffer, velocityBuffer);
 #if defined(NANOVDB_USE_OPENVDB)

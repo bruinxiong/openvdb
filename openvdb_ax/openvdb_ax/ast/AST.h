@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /// @file ast/AST.h
 ///
@@ -275,8 +275,8 @@ struct Node
     ///         AST and should not be used. @todo Make this private.
     /// @param  parent  The parent to set
     inline void setParent(Node* parent) {
-#ifndef NDEBUG
-        bool hasChild = false;
+#ifdef OPENVDB_ENABLE_ASSERTS
+        [[maybe_unused]] bool hasChild = false;
         for (size_t i = 0; i < parent->children(); ++i)
             hasChild |= parent->child(i) == this;
         OPENVDB_ASSERT(hasChild);
@@ -348,7 +348,7 @@ struct Variable : public Expression
     const Expression* basetype() const override { return this; }
     //
     size_t children() const override { return 0; }
-    const Node* child(const size_t) const override { return nullptr; }
+    const Node* child([[maybe_unused]] const size_t index) const override { return nullptr; }
     //
     inline const std::string& name() const { return mName; }
 
@@ -366,7 +366,7 @@ struct ValueBase : public Expression
     const Expression* basetype() const override { return this; }
     //
     size_t children() const override { return 0; }
-    const Node* child(const size_t) const override { return nullptr; }
+    const Node* child([[maybe_unused]] const size_t index) const override { return nullptr; }
 };
 
 
@@ -1665,7 +1665,7 @@ struct Keyword : public Statement
     /// @copybrief Node::children()
     size_t children() const override final { return 0; }
     /// @copybrief Node::child()
-    const Node* child(const size_t) const override final {
+    const Node* child([[maybe_unused]] const size_t index) const override final {
         return nullptr;
     }
     /// @brief  Query the keyword held on this node.

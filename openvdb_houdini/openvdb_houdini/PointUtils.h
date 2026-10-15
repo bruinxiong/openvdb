@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /// @file PointUtils.h
 ///
@@ -63,9 +63,6 @@ enum POINT_COMPRESSION_TYPE
 };
 
 
-// forward declaration
-class Interrupter;
-
 
 /// @brief Compute a voxel size from a Houdini detail
 ///
@@ -82,16 +79,6 @@ computeVoxelSizeFromHoudini(
     const openvdb::math::Mat4d& matrix,
     const openvdb::Index decimalPlaces,
     openvdb::util::NullInterrupter& interrupter);
-
-OPENVDB_DEPRECATED_MESSAGE("openvdb_houdini::Interrupter has been deprecated, use openvdb_houdini::HoudiniInterrupter")
-OPENVDB_HOUDINI_API
-float
-computeVoxelSizeFromHoudini(
-    const GU_Detail& detail,
-    const openvdb::Index pointsPerVoxel,
-    const openvdb::math::Mat4d& matrix,
-    const openvdb::Index decimalPlaces,
-    Interrupter& interrupter);
 
 
 /// @brief Convert a Houdini detail into a VDB Points grid
@@ -122,7 +109,6 @@ convertHoudiniToPointDataGrid(
 ///                        (empty vector defaults to all)
 /// @param  excludeGroups  a vector of VDB Points groups to be excluded
 ///                        (empty vector defaults to none)
-/// @param inCoreOnly      true if out-of-core leaf nodes are to be ignored
 OPENVDB_HOUDINI_API
 void
 convertPointDataGridToHoudini(
@@ -130,8 +116,7 @@ convertPointDataGridToHoudini(
     const openvdb::points::PointDataGrid& grid,
     const std::vector<std::string>& attributes = {},
     const std::vector<std::string>& includeGroups = {},
-    const std::vector<std::string>& excludeGroups = {},
-    const bool inCoreOnly = false);
+    const std::vector<std::string>& excludeGroups = {});
 
 
 /// @brief Populate VDB Points grid metadata from Houdini detail attributes

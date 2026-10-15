@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 #ifndef OPENVDB_MATH_VEC4_HAS_BEEN_INCLUDED
 #define OPENVDB_MATH_VEC4_HAS_BEEN_INCLUDED
@@ -288,8 +288,8 @@ public:
     /// return normalized this, or (1, 0, 0, 0) if this is null vector
     Vec4<T> unitSafe() const
     {
-        T l2 = lengthSqr();
-        return l2 ? *this / static_cast<T>(sqrt(l2)) : Vec4<T>(1, 0, 0, 0);
+        const T l2 = lengthSqr();
+        return !isApproxZero(l2) ? *this / static_cast<T>(sqrt(l2)) : Vec4<T>(1, 0, 0, 0);
     }
 
     /// Multiply each element of this vector by @a scalar.
@@ -555,6 +555,49 @@ inline Vec4<T> Exp(Vec4<T> v) { return v.exp(); }
 /// the components of the input vector.
 template <typename T>
 inline Vec4<T> Log(Vec4<T> v) { return v.log(); }
+
+/// @brief  Componentwise less than for Vec4 types.
+template <typename T1, typename T2>
+inline bool cwiseLessThan(const Vec4<T1>& a, const Vec4<T2>& b)
+{
+    for (int i = 0; i < 3; ++i) {
+        if (!isExactlyEqual(a[i], b[i])) return a[i] < b[i];
+    }
+    return a[3] < b[3];
+}
+
+/// @brief  Componentwise greater than for Vec4 types.
+template <typename T1, typename T2>
+inline bool cwiseGreaterThan(const Vec4<T1>& a, const Vec4<T2>& b)
+{
+    for (int i = 0; i < 3; ++i) {
+        if (!isExactlyEqual(a[i], b[i])) return a[i] > b[i];
+    }
+    return a[3] > b[3];
+}
+
+#ifndef OPENVDB_ENABLE_VEC_RELATIONAL_OPERATIONS
+template <typename T1, typename T2>
+inline bool operator<(const Vec4<T1>& a, const Vec4<T2>& b) = delete;
+template <typename T1, typename T2>
+inline bool operator>(const Vec4<T1>& a, const Vec4<T2>& b) = delete;
+#else
+/// @return true if a < b, comparing components in order of significance.
+template <typename T1, typename T2>
+OPENVDB_DEPRECATED_MESSAGE("relational operator< on vectors is ambiguous")
+inline bool operator<(const Vec4<T1>& a, const Vec4<T2>& b)
+{
+    return cwiseLessThan(a, b);
+}
+
+/// @return true if a > b, comparing components in order of significance.
+template <typename T1, typename T2>
+OPENVDB_DEPRECATED_MESSAGE("relational operator> on vectors is ambiguous")
+inline bool operator>(const Vec4<T1>& a, const Vec4<T2>& b)
+{
+    return cwiseGreaterThan(a, b);
+}
+#endif
 
 using Vec4i = Vec4<int32_t>;
 using Vec4ui = Vec4<uint32_t>;

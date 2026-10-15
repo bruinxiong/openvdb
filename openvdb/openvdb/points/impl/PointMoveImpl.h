@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /// @author Dan Bailey
 ///
@@ -16,9 +16,12 @@ OPENVDB_USE_VERSION_NAMESPACE
 namespace OPENVDB_VERSION_NAME {
 namespace points {
 
+/// @cond OPENVDB_DOCS_INTERNAL
+
 // define leaf index in use as 32-bit
 namespace point_move_internal { using LeafIndex = Index32; }
 
+/// @endcond
 
 /// @brief A Deformer that caches the resulting positions from evaluating another Deformer
 template <typename T>
@@ -82,6 +85,7 @@ private:
 
 ////////////////////////////////////////
 
+/// @cond OPENVDB_DOCS_INTERNAL
 
 namespace point_move_internal {
 
@@ -315,7 +319,6 @@ struct GlobalMovePointsOp
         // extract target array and ensure data is out-of-core and non-uniform
 
         auto& targetArray = leaf.attributeArray(mAttributeIndex);
-        targetArray.loadData();
         targetArray.expand();
 
         // perform the copy
@@ -340,7 +343,6 @@ struct GlobalMovePointsOp
 
                 const LeafT& sourceLeaf = mSourceLeafManager.leaf(sourceLeafIndex);
                 const auto& sourceArray = sourceLeaf.constAttributeArray(mAttributeIndex);
-                sourceArray.loadData();
 
                 targetArray.copyValuesUnsafe(sourceArray, copyIterator);
 
@@ -423,12 +425,10 @@ struct LocalMovePointsOp
         const Index sourceLeafOffset(mSourceIndices[idx]);
         LeafT& sourceLeaf = mSourceLeafManager.leaf(sourceLeafOffset);
         const auto& sourceArray = sourceLeaf.constAttributeArray(mAttributeIndex);
-        sourceArray.loadData();
 
         // extract target array and ensure data is out-of-core and non-uniform
 
         auto& targetArray = leaf.attributeArray(mAttributeIndex);
-        targetArray.loadData();
         targetArray.expand();
 
         // perform the copy
@@ -448,6 +448,7 @@ private:
 
 } // namespace point_move_internal
 
+/// @endcond
 
 ////////////////////////////////////////
 

@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /// @file math/Maps.h
 
@@ -2374,14 +2374,9 @@ public:
     /// read serialization
     void read(std::istream& is) override
     {
-        // for backward compatibility with earlier version
-        if (io::getFormatVersion(is) < OPENVDB_FILE_VERSION_FLOAT_FRUSTUM_BBOX ) {
-            CoordBBox bb;
-            bb.read(is);
-            mBBox = BBoxd(bb.min().asVec3d(), bb.max().asVec3d());
-        } else {
-            mBBox.read(is);
-        }
+        io::checkFormatVersion(is);
+
+        mBBox.read(is);
 
         is.read(reinterpret_cast<char*>(&mTaper), sizeof(double));
         is.read(reinterpret_cast<char*>(&mDepth), sizeof(double));

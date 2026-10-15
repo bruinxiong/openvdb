@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 #include <nanovdb/NanoVDB.h> // this defined the core tree data structure of NanoVDB accessable on both the host and device
 #include <nanovdb/cuda/GridHandle.cuh>// required since GridHandle<DeviceBuffer> has device code
@@ -24,6 +24,7 @@ __global__ void gpu_kernel(const nanovdb::NanoGrid<float>* deviceGrid)
 }
 
 // This is called by the client code on the host
+
 extern "C" void launch_kernels(const nanovdb::NanoGrid<float>* deviceGrid,
                                const nanovdb::NanoGrid<float>* cpuGrid,
                                cudaStream_t                    stream)

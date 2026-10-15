@@ -1,9 +1,11 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 #if defined(NANOVDB_USE_OPENVDB)
 
+#ifndef _USE_MATH_DEFINES
 #define _USE_MATH_DEFINES
+#endif
 #include <cmath>
 #include <chrono>
 
@@ -11,16 +13,11 @@
 #include <openvdb/math/Ray.h>
 #include <openvdb/tools/LevelSetSphere.h>
 
-#include <nanovdb/cuda/DeviceBuffer.h>
 #include <nanovdb/tools/NanoToOpenVDB.h>
 
 #include "common.h"
 
-#if defined(NANOVDB_USE_CUDA)
-using BufferT = nanovdb::cuda::DeviceBuffer;
-#else
-using BufferT = nanovdb::HostBuffer;
-#endif
+using BufferT = nanovdb::HostBuffer; // the handle lives in host memory; the CUDA side deep-copies it to the device
 
 void runOpenVDB(nanovdb::GridHandle<BufferT>& handle, int numIterations, int width, int height, BufferT& imageBuffer)
 {
@@ -30,10 +27,9 @@ void runOpenVDB(nanovdb::GridHandle<BufferT>& handle, int numIterations, int wid
     using Vec3T = openvdb::math::Vec3<RealT>;
     using RayT = openvdb::math::Ray<RealT>;
 
-    auto srcGrid = nanovdb::tools::nanoToOpenVDB(handle);
+    openvdb::GridBase::Ptr srcGrid = nanovdb::tools::nanoToOpenVDB(handle);
     std::cout << "Exporting to OpenVDB grid[" << srcGrid->getName() << "]...\n";
-
-    auto h_grid = (GridT*)srcGrid.get();
+    GridT::Ptr h_grid = openvdb::GridBase::grid<GridT>(srcGrid);
 
     float* h_outImage = reinterpret_cast<float*>(imageBuffer.data());
 
@@ -82,7 +78,7 @@ void runOpenVDB(nanovdb::GridHandle<BufferT>& handle, int numIterations, int wid
     {
         float durationAvg = 0;
         for (int i = 0; i < numIterations; ++i) {
-            float duration = renderImage(false, renderOp, width, height, h_outImage, h_grid);
+            float duration = renderImage(false, renderOp, width, height, h_outImage, h_grid.get());
             //std::cout << "Duration(OpenVDB-Host) = " << duration << " ms" << std::endl;
             durationAvg += duration;
         }

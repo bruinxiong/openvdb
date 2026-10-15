@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /// @file   MeshToVolume.h
 ///
@@ -16,7 +16,7 @@
 #ifndef OPENVDB_TOOLS_MESH_TO_VOLUME_HAS_BEEN_INCLUDED
 #define OPENVDB_TOOLS_MESH_TO_VOLUME_HAS_BEEN_INCLUDED
 
-#include <openvdb/Platform.h> // for OPENVDB_HAS_CXX11
+#include <openvdb/Platform.h>
 #include <openvdb/Types.h>
 #include <openvdb/math/FiniteDifference.h> // for GodunovsNormSqrd
 #include <openvdb/math/Proximity.h> // for closestPointOnTriangleToPoint
@@ -167,7 +167,7 @@ meshToVolume(
     int flags = 0,
     typename GridType::template ValueConverter<Int32>::Type * polygonIndexGrid = nullptr,
     InteriorTest interiorTest = nullptr,
-    InteriorTestStrategy interiorTestStrategy = EVAL_EVERY_VOXEL);
+    InteriorTestStrategy interiorTestStrat = EVAL_EVERY_VOXEL);
 
 
 ////////////////////////////////////////
@@ -1645,7 +1645,7 @@ checkNeighbours(const Index pos, const typename LeafNodeType::ValueType * data, 
     // i + 1, j, k
     if (mask[0] && Compare::check(data[pos + NodeT::DIM * NodeT::DIM]))                   return true;
     // i+1, j, k-1
-    if (mask[6] && Compare::check(data[pos + NodeT::DIM * NodeT::DIM]))                   return true;
+    if (mask[6] && Compare::check(data[pos + NodeT::DIM * NodeT::DIM - 1]))               return true;
     // i-1, j, k-1
     if (mask[7] && Compare::check(data[pos - NodeT::DIM * NodeT::DIM - 1]))               return true;
     // i+1, j, k+1
@@ -2169,12 +2169,15 @@ private:
         unsigned char primId = data.getNewPrimId();
         data.primIdAcc.setValueOnly(ijk, primId);
 
+        // iteration number to check for an interrupt
+        constexpr Int32 freq = 2<<12;
+
         while (!coordList.empty()) {
             if (interrupter && interrupter->wasInterrupted()) {
                 thread::cancelGroupExecution();
                 break;
             }
-            for (Int32 pass = 0; pass < 1048576 && !coordList.empty(); ++pass) {
+            for (Int32 pass = 0; pass < freq && !coordList.empty(); ++pass) {
                 ijk = coordList.back();
                 coordList.pop_back();
 
@@ -2182,7 +2185,7 @@ private:
                     nijk = ijk + util::COORD_OFFSETS[i];
                     if (primId != data.primIdAcc.getValue(nijk)) {
                         data.primIdAcc.setValueOnly(nijk, primId);
-                        if(updateDistance(nijk, prim, data)) coordList.push_back(nijk);
+                        if (updateDistance(nijk, prim, data)) coordList.push_back(nijk);
                     }
                 }
             }
@@ -2718,7 +2721,7 @@ private:
         return ValueType(std::sqrt(dist)) * mVoxelSize;
     }
 
-    /// @note   Returns true if the current voxel was updated and neighbouring
+    /// @note   Returns true if the current voxel was updated and neighboring
     ///         voxels need to be evaluated.
     bool
     updateVoxel(const Coord& ijk, const Int32 manhattanLimit,

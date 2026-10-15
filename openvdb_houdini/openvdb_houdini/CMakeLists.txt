@@ -1,5 +1,5 @@
 # Copyright Contributors to the OpenVDB Project
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 #[=======================================================================[
 
@@ -40,7 +40,7 @@
 
 #]=======================================================================]
 
-cmake_minimum_required(VERSION 3.18)
+cmake_minimum_required(VERSION 3.24)
 project(OpenVDBHoudini LANGUAGES CXX)
 
 
@@ -123,6 +123,8 @@ set(OPENVDB_HOUDINI_ICON_INSTALL_PREFIX ${OPENVDB_HOUDINI_INSTALL_PREFIX}/config
   CACHE PATH "Install path for the OpenVDB Houdini node icons")
 set(OPENVDB_HOUDINI_PYTHON_INSTALL_PREFIX ${OPENVDB_HOUDINI_INSTALL_PREFIX}/python2.7libs
   CACHE PATH "Install path for the OpenVDB Houdini startup script")
+set(OPENVDB_HOUDINI_GLSL_INSTALL_PREFIX ${OPENVDB_HOUDINI_INSTALL_PREFIX}/glsl
+  CACHE PATH "Install path for the OpenVDB Houdini GLSL shaders")
 
 #########################################################################
 
@@ -394,6 +396,9 @@ install(FILES
 
 install(DIRECTORY help/
   DESTINATION ${OPENVDB_HOUDINI_HELP_INSTALL_PREFIX})
+
+install(DIRECTORY glsl/
+  DESTINATION ${OPENVDB_HOUDINI_GLSL_INSTALL_PREFIX})
 
 if(OPENVDB_INSTALL_HOUDINI_PYTHONRC)
   install(FILES

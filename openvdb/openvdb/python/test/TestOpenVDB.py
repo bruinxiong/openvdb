@@ -1,6 +1,6 @@
 #!/usr/local/bin/python
 # Copyright Contributors to the OpenVDB Project
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Unit tests for the OpenVDB Python module
@@ -12,7 +12,9 @@ C++-to-Python bindings, not the OpenVDB library itself.
 import os, os.path
 import sys
 import unittest
-import inspect
+import numpy as np
+import random
+import time
 
 # If on Windows, add required dll directories from our binary build tree
 if 'add_dll_directory' in dir(os):
@@ -23,7 +25,7 @@ if 'add_dll_directory' in dir(os):
         os.add_dll_directory(os.getcwd() +
             '\\..\\..\\..\\..\\openvdb_ax\\openvdb_ax\\' + config)
 
-import pyopenvdb as openvdb
+import openvdb
 
 
 def valueFactory(zeroValue, elemValue):
@@ -46,14 +48,14 @@ def valueFactory(zeroValue, elemValue):
 
 def ax_is_enabled():
     '''
-    Return true if we should be testing pyopenvdb.ax(). This environment
+    Return true if we should be testing openvdb.ax(). This environment
     variable is set by the CMake test command if we expect AX to be tested.
     '''
-    ax_hook_exists = 'ax' in dir(openvdb) and inspect.isbuiltin(openvdb.ax)
+    ax_hook_exists = hasattr(openvdb, 'ax')
     ax_is_enabled = os.getenv('OPENVDB_TEST_PYTHON_AX')
     if ax_is_enabled and not ax_hook_exists:
         raise RuntimeError('Expected to test the AX python hooks but '
-            'pyopenvdb.ax() has not been located.')
+            'openvdb.ax() has not been located.')
     return ax_is_enabled
 
 
@@ -285,6 +287,10 @@ class TestOpenVDB(unittest.TestCase):
         onCoords = set([(-10, -10, -10), (0, 0, 0), (1, 1, 1)])
 
         for factory in openvdb.GridTypes:
+            # Skip for PDGs - can't set or fill
+            if factory.valueTypeName.startswith('ptdataidx'):
+                continue
+
             grid = factory()
             acc = grid.getAccessor()
             for c in onCoords:
@@ -322,7 +328,7 @@ class TestOpenVDB(unittest.TestCase):
 
             # Verify that writing through a const iterator is not allowed.
             value = grid.citerOnValues().next()
-            self.assertRaises(AttributeError, lambda: setattr(value, 'active', 0))
+            self.assertRaises(AttributeError, lambda: setattr(value, 'active', False))
             self.assertRaises(AttributeError, lambda: setattr(value, 'depth', 0))
             # Verify that some value attributes are immutable, even given a non-const iterator.
             value = grid.iterOnValues().next()
@@ -465,6 +471,10 @@ class TestOpenVDB(unittest.TestCase):
 
         # Test pickling of grids of various types.
         for factory in openvdb.GridTypes:
+            # skip test for PointDataGrids
+            # @todo  add back in, cant use fill on PDG
+            if factory.valueTypeName.startswith('ptdataidx'):
+                continue
 
             # Construct a grid.
             grid = factory()
@@ -534,22 +544,9 @@ class TestOpenVDB(unittest.TestCase):
 
 
     def testCopyFromArray(self):
-        import random
-        import time
-
-        # Skip this test if NumPy is not available.
-        try:
-            import numpy as np
-        except ImportError:
-            return
-
-        # Skip this test if the OpenVDB module was built without NumPy support.
         arr = np.zeros((1, 2, 1))
         grid = openvdb.FloatGrid()
-        try:
-            grid.copyFromArray(arr)
-        except NotImplementedError:
-            return
+        grid.copyFromArray(arr)
 
         # Verify that a non-three-dimensional array can't be copied into a grid.
         grid = openvdb.FloatGrid()
@@ -633,22 +630,9 @@ class TestOpenVDB(unittest.TestCase):
 
 
     def testCopyToArray(self):
-        import random
-        import time
-
-        # Skip this test if NumPy is not available.
-        try:
-            import numpy as np
-        except ImportError:
-            return
-
-        # Skip this test if the OpenVDB module was built without NumPy support.
         arr = np.zeros((1, 2, 1))
         grid = openvdb.FloatGrid()
-        try:
-            grid.copyFromArray(arr)
-        except NotImplementedError:
-            return
+        grid.copyFromArray(arr)
 
         # Verify that a grid can't be copied into a non-three-dimensional array.
         grid = openvdb.FloatGrid()
@@ -679,7 +663,7 @@ class TestOpenVDB(unittest.TestCase):
                 for dtype in (np.float32, np.int32, np.float64, np.int64, np.uint32, bool):
                     # Return a new NumPy array.
                     arr = np.ndarray(shape, dtype)
-                    arr.fill(-100)
+                    arr.fill(999)
                     yield arr
 
         # Test copying from arrays of various types to grids of various types.
@@ -728,14 +712,6 @@ class TestOpenVDB(unittest.TestCase):
 
 
     def testMeshConversion(self):
-        import time
-
-        # Skip this test if NumPy is not available.
-        try:
-            import numpy as np
-        except ImportError:
-            return
-
         # Test mesh to volume conversion.
 
         # Generate the vertices of a cube.
@@ -762,12 +738,8 @@ class TestOpenVDB(unittest.TestCase):
         for gridType in [n for n in openvdb.GridTypes
             if n.__name__ in ('FloatGrid', 'DoubleGrid')]:
 
-            # Skip this test if the OpenVDB module was built without NumPy support.
-            try:
-                grid = gridType.createLevelSetFromPolygons(
-                    cubePoints, quads=cubeQuads, transform=xform, halfWidth=halfWidth)
-            except NotImplementedError:
-                return
+            grid = gridType.createLevelSetFromPolygons(
+                cubePoints, quads=cubeQuads, transform=xform, halfWidth=halfWidth)
 
             #openvdb.write('/tmp/testMeshConversion.vdb', grid)
 
@@ -787,8 +759,6 @@ class TestOpenVDB(unittest.TestCase):
         # Vector-valued grids can't be used to store level sets.
         self.assertRaises(TypeError, lambda: openvdb.Vec3SGrid.createLevelSetFromPolygons(
             cubePoints, quads=cubeQuads, transform=xform, halfWidth=halfWidth))
-        # The "points" argument to createLevelSetFromPolygons() can be a regular array.
-        openvdb.FloatGrid.createLevelSetFromPolygons(cubeVertices, quads=cubeQuads, transform=xform, halfWidth=halfWidth)
         # The "points" argument to createLevelSetFromPolygons() can be an array that's implicitly convertible to float
         openvdb.FloatGrid.createLevelSetFromPolygons(np.array(cubeVertices, bool), quads=cubeQuads, transform=xform, halfWidth=halfWidth)
         # The "triangles" argument to createLevelSetFromPolygons() must be an N x 3 NumPy array.

@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 #ifndef OPENVDB_TREE_LEAFNODE_HAS_BEEN_INCLUDED
 #define OPENVDB_TREE_LEAFNODE_HAS_BEEN_INCLUDED
@@ -83,6 +83,9 @@ public:
     /// @param value   a value with which to fill the buffer
     /// @param active  the active state to which to initialize all voxels
     /// @details This constructor does not allocate memory for voxel values.
+    /// Call @c buffer().allocate() before accessing voxel data. The valid
+    /// advanced pattern is: create all leaves single-threaded, then call
+    /// @c allocate() in parallel across distinct leaves.
     LeafNode(PartialCreate,
              const Coord& coords,
              const ValueType& value = zeroVal<ValueType>(),
@@ -129,11 +132,13 @@ public:
     /// Return the dimension of child nodes of this LeafNode, which is one for voxels.
     static Index getChildDim() { return 1; }
     /// Return the leaf count for this node, which is one.
-    static Index32 leafCount() { return 1; }
+    static Index64 leafCount() { return 1; }
     /// no-op
+    void nodeCount(std::vector<Index64> &) const {}
+    OPENVDB_DEPRECATED_MESSAGE("Use input type std::vector<Index64> for nodeCount.")
     void nodeCount(std::vector<Index32> &) const {}
     /// Return the non-leaf count for this node, which is zero.
-    static Index32 nonLeafCount() { return 0; }
+    static Index64 nonLeafCount() { return 0; }
     /// Return the child count for this node, which is zero.
     static Index32 childCount() { return 0; }
 
@@ -150,13 +155,14 @@ public:
     /// Return @c true if this node contains only active voxels.
     bool isDense() const { return mValueMask.isOn(); }
     /// Return @c true if memory for this node's buffer has been allocated.
-    bool isAllocated() const { return !mBuffer.isOutOfCore() && !mBuffer.empty(); }
+    bool isAllocated() const { return !mBuffer.empty(); }
     /// Allocate memory for this node's buffer if it has not already been allocated.
     bool allocate() { return mBuffer.allocate(); }
 
     /// Return the memory in bytes occupied by this node.
     Index64 memUsage() const;
-    Index64 memUsageIfLoaded() const;
+    OPENVDB_DEPRECATED_MESSAGE("Use memUsage() instead. This method is deprecated and will be removed. Delayed loading is no longer supported.")
+    Index64 memUsageIfLoaded() const { return memUsage(); }
 
     /// Expand the given bounding box so that it includes this leaf node's active voxels.
     /// If visitVoxels is false this LeafNode will be approximated as dense, i.e. with all
@@ -217,31 +223,60 @@ protected:
         public SparseIteratorBase<
             MaskIterT, ValueIter<MaskIterT, NodeT, ValueT, TagT>, NodeT, ValueT>
     {
+        using ValueType = std::conditional_t<std::is_const_v<NodeT>, ValueT,
+            std::remove_const_t<ValueT>>;
         using BaseT = SparseIteratorBase<MaskIterT, ValueIter, NodeT, ValueT>;
 
         ValueIter() {}
-        ValueIter(const MaskIterT& iter, NodeT* parent): BaseT(iter, parent) {}
+        ValueIter(const MaskIterT& iter, NodeT* parent)
+            : BaseT(iter, parent)
+            // Unlike other value iterators, cache the buffer data as part of
+            // the iterators members to avoid the cost of going through the
+            // leaf buffer atomic/checking API
+            , mData([&]() { OPENVDB_ASSERT(parent); return parent->buffer().data(); }()) {}
 
-        ValueT& getItem(Index pos) const { return this->parent().getValue(pos); }
-        ValueT& getValue() const { return this->parent().getValue(this->pos()); }
+        ValueT& getItem(Index pos) const { return mData[pos]; }
+        ValueT& getValue() const { return this->getItem(this->pos()); }
 
         // Note: setItem() can't be called on const iterators.
         void setItem(Index pos, const ValueT& value) const
         {
-            this->parent().setValueOnly(pos, value);
+            if constexpr (std::is_const_v<NodeT>) {
+                static_assert(!std::is_const_v<NodeT>,
+                    "ValueIter::setItem cannot be called on const iterators");
+            }
+            else {
+                OPENVDB_ASSERT(pos < SIZE);
+                OPENVDB_ASSUME(pos < SIZE);
+                mData[pos] = value;
+            }
         }
         // Note: setValue() can't be called on const iterators.
-        void setValue(const ValueT& value) const
-        {
-            this->parent().setValueOnly(this->pos(), value);
-        }
+        void setValue(const ValueT& value) const { this->setItem(this->pos(), value); }
 
         // Note: modifyItem() can't be called on const iterators.
         template<typename ModifyOp>
-        void modifyItem(Index n, const ModifyOp& op) const { this->parent().modifyValue(n, op); }
+        void modifyItem(Index n, const ModifyOp& op) const
+        {
+            if constexpr (std::is_const_v<NodeT>) {
+                static_assert(!std::is_const_v<NodeT>,
+                    "ValueIter::modifyItem cannot be called on const iterators");
+            }
+            else {
+                OPENVDB_ASSERT(n < SIZE);
+                OPENVDB_ASSUME(n < SIZE);
+                op(mData[n]);
+                this->parent().setValueOn(n);
+            }
+        }
         // Note: modifyValue() can't be called on const iterators.
         template<typename ModifyOp>
-        void modifyValue(const ModifyOp& op) const { this->parent().modifyValue(this->pos(), op); }
+        void modifyValue(const ModifyOp& op) const
+        {
+            this->modifyItem(this->pos(), op);
+        }
+    private:
+        ValueType* mData;
     };
 
     /// Leaf nodes have no children, so their child iterators have no get/set accessors.
@@ -346,6 +381,7 @@ public:
     const Buffer& buffer() const { return mBuffer; }
     Buffer& buffer() { return mBuffer; }
 
+#if OPENVDB_ABI_VERSION_NUMBER < 14
     //
     // I/O methods
     //
@@ -371,6 +407,7 @@ public:
     /// @param os      the stream to which to write
     /// @param toHalf  if true, output floating-point values as 16-bit half floats
     void writeBuffers(std::ostream& os, bool toHalf = false) const;
+#endif // OPENVDB_ABI_VERSION_NUMBER < 14
 
     size_t streamingSize(bool toHalf = false) const;
 
@@ -435,7 +472,6 @@ public:
     template<typename ModifyOp>
     void modifyValue(Index offset, const ModifyOp& op)
     {
-        mBuffer.loadValues();
         if (!mBuffer.empty()) {
             // in-place modify value
             ValueType& val = const_cast<ValueType&>(mBuffer[offset]);
@@ -456,7 +492,6 @@ public:
     template<typename ModifyOp>
     void modifyValueAndActiveState(const Coord& xyz, const ModifyOp& op)
     {
-        mBuffer.loadValues();
         if (!mBuffer.empty()) {
             const Index offset = this->coordToOffset(xyz);
             bool state = mValueMask.isOn(offset);
@@ -473,9 +508,13 @@ public:
     void setValuesOff() { mValueMask.setOff(); }
 
     /// Return @c true if the voxel at the given coordinates is active.
-    bool isValueOn(const Coord& xyz) const {return this->isValueOn(LeafNode::coordToOffset(xyz));}
+    bool isValueOn(const Coord& xyz) const { return this->isValueOn(LeafNode::coordToOffset(xyz)); }
     /// Return @c true if the voxel at the given offset is active.
-    bool isValueOn(Index offset) const { return mValueMask.isOn(offset); }
+    bool isValueOn(Index offset) const { OPENVDB_ASSERT(offset < SIZE); return mValueMask.isOn(offset); }
+    /// Return @c true if the voxel at the given coordinates is inactive.
+    bool isValueOff(const Coord& xyz) const { return this->isValueOff(LeafNode::coordToOffset(xyz)); }
+    /// Return @c true if the voxel at the given offset is inactive.
+    bool isValueOff(Index offset) const { OPENVDB_ASSERT(offset < SIZE); return mValueMask.isOff(offset); }
 
     /// Return @c false since leaf nodes never contain tiles.
     static bool hasActiveTiles() { return false; }
@@ -825,6 +864,29 @@ public:
     /// Return @c true if all of this node's values are inactive.
     bool isInactive() const { return mValueMask.isOff(); }
 
+    //
+    // Unsafe methods
+    //
+    // These methods are not in fact unsafe, but are only offered so that
+    // the same methods can be called on both internal nodes and leaf nodes.
+
+    /// Return the value of the voxel at the given offset.
+    const ValueType& getValueUnsafe(Index offset) const { return this->getValue(offset); }
+    /// Return true if the voxel at the given offset is active and set value.
+    bool getValueUnsafe(Index offset, ValueType& value) const { return this->probeValue(offset, value); }
+    /// Set the active state of the voxel at the given offset but don't change its value.
+    void setActiveStateUnsafe(Index offset, bool on) { this->setActiveState(offset, on); }
+    /// Set the value of the voxel at the given coordinates but don't change its active state.
+    void setValueOnlyUnsafe(Index offset, const ValueType& value) { return this->setValueOnly(offset, value); }
+    /// Mark the voxel at the given offset as active but don't change its value.
+    void setValueOnUnsafe(Index offset) { this->setValueOn(offset); }
+    /// Set the value of the voxel at the given coordinates and mark the voxel as active.
+    void setValueOnUnsafe(Index offset, const ValueType& value) { this->setValueOn(offset, value); }
+    /// Mark the voxel at the given offset as inactive but don't change its value.
+    void setValueOffUnsafe(Index offset) { this->setValueOff(offset); }
+    /// Set the value of the voxel at the given coordinates and mark the voxel as active.
+    void setValueOffUnsafe(Index offset, const ValueType& value) { this->setValueOff(offset, value); }
+
 protected:
     friend class ::TestLeaf;
     template<typename> friend class ::TestLeafIO;
@@ -864,7 +926,10 @@ protected:
     void setValueMaskOn(Index n)  { mValueMask.setOn(n); }
     void setValueMaskOff(Index n) { mValueMask.setOff(n); }
 
+
+#if OPENVDB_ABI_VERSION_NUMBER < 14
     inline void skipCompressedValues(bool seekable, std::istream&, bool fromHalf);
+#endif // OPENVDB_ABI_VERSION_NUMBER < 14
 
     /// Compute the origin of the leaf node that contains the voxel with the given coordinates.
     static void evalNodeOrigin(Coord& xyz) { xyz &= ~(DIM - 1); }
@@ -949,7 +1014,11 @@ LeafNode<T, Log2Dim>::LeafNode(const LeafNode<OtherValueType, Log2Dim>& other)
 {
     struct Local {
         /// @todo Consider using a value conversion functor passed as an argument instead.
-        static inline ValueType convertValue(const OtherValueType& val) { return ValueType(val); }
+        static inline ValueType convertValue(const OtherValueType& val) {
+            OPENVDB_NO_TYPE_CONVERSION_WARNING_BEGIN
+            return ValueType(val);
+            OPENVDB_NO_TYPE_CONVERSION_WARNING_END
+        }
     };
 
     for (Index i = 0; i < SIZE; ++i) {
@@ -1204,8 +1273,6 @@ template<typename DenseT>
 inline void
 LeafNode<T, Log2Dim>::copyToDense(const CoordBBox& bbox, DenseT& dense) const
 {
-    mBuffer.loadValues();
-
     using DenseValueType = typename DenseT::ValueType;
 
     const size_t xStride = dense.xStride(), yStride = dense.yStride(), zStride = dense.zStride();
@@ -1264,6 +1331,8 @@ LeafNode<T, Log2Dim>::copyFromDense(const CoordBBox& bbox, const DenseT& dense,
 ////////////////////////////////////////
 
 
+#if OPENVDB_ABI_VERSION_NUMBER < 14
+
 template<typename T, Index Log2Dim>
 inline void
 LeafNode<T, Log2Dim>::readTopology(std::istream& is, bool /*fromHalf*/)
@@ -1278,10 +1347,6 @@ LeafNode<T, Log2Dim>::writeTopology(std::ostream& os, bool /*toHalf*/) const
 {
     mValueMask.save(os);
 }
-
-
-////////////////////////////////////////
-
 
 
 template<typename T, Index Log2Dim>
@@ -1312,12 +1377,10 @@ template<typename T, Index Log2Dim>
 inline void
 LeafNode<T,Log2Dim>::readBuffers(std::istream& is, const CoordBBox& clipBBox, bool fromHalf)
 {
+    io::checkFormatVersion(is);
+
     SharedPtr<io::StreamMetadata> meta = io::getStreamMetadataPtr(is);
     const bool seekable = meta && meta->seekable();
-
-#ifdef OPENVDB_USE_DELAYED_LOADING
-    std::streamoff maskpos = is.tellg();
-#endif
 
     if (seekable) {
         // Seek over the value mask.
@@ -1341,42 +1404,16 @@ LeafNode<T,Log2Dim>::readBuffers(std::istream& is, const CoordBBox& clipBBox, bo
         // This node lies completely outside the clipping region.
         skipCompressedValues(seekable, is, fromHalf);
         mValueMask.setOff();
-        mBuffer.setOutOfCore(false);
     } else {
-#ifdef OPENVDB_USE_DELAYED_LOADING
-        // If this node lies completely inside the clipping region and it is being read
-        // from a memory-mapped file, delay loading of its buffer until the buffer
-        // is actually accessed.  (If this node requires clipping, its buffer
-        // must be accessed and therefore must be loaded.)
-        io::MappedFile::Ptr mappedFile = io::getMappedFilePtr(is);
-        const bool delayLoad = ((mappedFile.get() != nullptr) && clipBBox.isInside(nodeBBox));
+        mBuffer.allocate();
+        io::readCompressedValues(is, mBuffer.mData, SIZE, mValueMask, fromHalf);
 
-        if (delayLoad) {
-            mBuffer.setOutOfCore(true);
-            mBuffer.mFileInfo = new typename Buffer::FileInfo;
-            mBuffer.mFileInfo->meta = meta;
-            mBuffer.mFileInfo->bufpos = is.tellg();
-            mBuffer.mFileInfo->mapping = mappedFile;
-            // Save the offset to the value mask, because the in-memory copy
-            // might change before the value buffer gets read.
-            mBuffer.mFileInfo->maskpos = maskpos;
-            // Skip over voxel values.
-            skipCompressedValues(seekable, is, fromHalf);
-        } else {
-#endif
-            mBuffer.allocate();
-            io::readCompressedValues(is, mBuffer.mData, SIZE, mValueMask, fromHalf);
-            mBuffer.setOutOfCore(false);
-
-            // Get this tree's background value.
-            T background = zeroVal<T>();
-            if (const void* bgPtr = io::getGridBackgroundValuePtr(is)) {
-                background = *static_cast<const T*>(bgPtr);
-            }
-            this->clip(clipBBox, background);
-#ifdef OPENVDB_USE_DELAYED_LOADING
+        // Get this tree's background value.
+        T background = zeroVal<T>();
+        if (const void* bgPtr = io::getGridBackgroundValuePtr(is)) {
+            background = *static_cast<const T*>(bgPtr);
         }
-#endif
+        this->clip(clipBBox, background);
     }
 
     if (numBuffers > 1) {
@@ -1392,9 +1429,6 @@ LeafNode<T,Log2Dim>::readBuffers(std::istream& is, const CoordBBox& clipBBox, bo
             }
         }
     }
-
-    // increment the leaf number
-    if (meta)   meta->setLeaf(meta->leaf() + 1);
 }
 
 
@@ -1405,11 +1439,11 @@ LeafNode<T, Log2Dim>::writeBuffers(std::ostream& os, bool toHalf) const
     // Write out the value mask.
     mValueMask.save(os);
 
-    mBuffer.loadValues();
-
     io::writeCompressedValues(os, mBuffer.mData, SIZE,
         mValueMask, /*childMask=*/NodeMaskType(), toHalf);
 }
+
+#endif // OPENVDB_ABI_VERSION_NUMBER < 14
 
 
 ////////////////////////////////////////
@@ -1432,16 +1466,6 @@ LeafNode<T, Log2Dim>::memUsage() const
     // Use sizeof(*this) to capture alignment-related padding
     // (but note that sizeof(*this) includes sizeof(mBuffer)).
     return sizeof(*this) + mBuffer.memUsage() - sizeof(mBuffer);
-}
-
-
-template<typename T, Index Log2Dim>
-inline Index64
-LeafNode<T, Log2Dim>::memUsageIfLoaded() const
-{
-    // Use sizeof(*this) to capture alignment-related padding
-    // (but note that sizeof(*this) includes sizeof(mBuffer)).
-    return sizeof(*this) + mBuffer.memUsageIfLoaded() - sizeof(mBuffer);
 }
 
 
@@ -1496,11 +1520,11 @@ LeafNode<T, Log2Dim>::isConstant(ValueType& minValue,
     minValue = maxValue = mBuffer[0];
     for (Index i = 1; i < SIZE; ++i) {
         const T& v = mBuffer[i];
-        if (v < minValue) {
-            if ((maxValue - v) > tolerance) return false;// early termination
+        if (math::cwiseLessThan(v, minValue)) {
+            if (math::cwiseGreaterThan((maxValue - v), tolerance)) return false;// early termination
             minValue = v;
-        } else if (v > maxValue) {
-            if ((v - minValue) > tolerance) return false;// early termination
+        } else if (math::cwiseGreaterThan(v, maxValue)) {
+            if (math::cwiseGreaterThan((v - minValue), tolerance)) return false;// early termination
             maxValue = v;
         }
     }
@@ -1521,7 +1545,10 @@ LeafNode<T, Log2Dim>::medianAll(T *tmp) const
         for (T* dst = tmp; dst-tmp < NUM_VALUES;) *dst++ = *src++;
     }
     static const size_t midpoint = (NUM_VALUES - 1) >> 1;
-    std::nth_element(tmp, tmp + midpoint, tmp + NUM_VALUES);
+    std::nth_element(tmp, tmp + midpoint, tmp + NUM_VALUES,
+        [](const auto& a, const auto& b) {
+            return math::cwiseLessThan(a, b);
+        });
     return tmp[midpoint];
 }
 
@@ -1544,7 +1571,10 @@ LeafNode<T, Log2Dim>::medianOn(T &value, T *tmp) const
     for (auto iter=this->cbeginValueOn(); iter; ++iter) *tmp++ = *iter;
     T *begin = tmp - count;
     const size_t midpoint = (count - 1) >> 1;
-    std::nth_element(begin, begin + midpoint, tmp);
+    std::nth_element(begin, begin + midpoint, tmp,
+        [](const auto& a, const auto& b) {
+            return math::cwiseLessThan(a, b);
+        });
     value = begin[midpoint];
     return count;
 }
@@ -1568,7 +1598,10 @@ LeafNode<T, Log2Dim>::medianOff(T &value, T *tmp) const
     for (auto iter=this->cbeginValueOff(); iter; ++iter) *tmp++ = *iter;
     T *begin = tmp - count;
     const size_t midpoint = (count - 1) >> 1;
-    std::nth_element(begin, begin + midpoint, tmp);
+    std::nth_element(begin, begin + midpoint, tmp,
+        [](const auto& a, const auto& b) {
+            return math::cwiseLessThan(a, b);
+        });
     value = begin[midpoint];
     return count;
 }

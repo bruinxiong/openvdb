@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 //
 /// @file SOP_OpenVDB_Visualize.cc
 ///
@@ -72,7 +72,7 @@ public:
 
     static OP_Node* factory(OP_Network*, const char* name, OP_Operator*);
 
-    int isRefInput(unsigned i) const override { return (i == 1); }
+    int isRefInput(OP_InputIdx i) const override { return (i == 1); }
 
     int storeOffsets();
 

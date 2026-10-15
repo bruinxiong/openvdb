@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 //
 /// @file SOP_OpenVDB_Activate.cc
 ///
@@ -21,6 +21,9 @@
 
 #include <UT/UT_Version.h>
 #include <GEO/GEO_PrimVolume.h>
+#if SYS_VERSION_MAJOR_INT >= 22
+#include <GEO/GEO_ImplicitSurfaceVDB.h>
+#endif
 #include <GU/GU_PrimVDB.h>
 #include <GU/GU_ConvexHull3D.h>
 #include <OP/OP_Node.h>
@@ -60,8 +63,8 @@ enum OPERATION_NAMES
 class SOP_VDBActivate : public hvdb::SOP_NodeVDB
 {
 public:
-    const char  *inputLabel(unsigned idx) const override;
-    int          isRefInput(unsigned i) const override;
+    const char  *inputLabel(OP_InputIdx idx) const override;
+    int          isRefInput(OP_InputIdx i) const override;
 
     bool         updateParmsFlags() override;
 
@@ -218,10 +221,10 @@ an inclusive range, so includes the maximum voxel.)"));
     support operation or setting of values.
 */
     parms.add(hutil::ParmFactory(PRM_INT, "expand", "Expand Voxels")
-                .setDefault(PRMoneDefaults)
+              .setDefault(PRMoneDefaults)
               .setRange(PRM_RANGE_UI, -5, PRM_RANGE_UI, 5)
               .setTooltip("Expand the active area by at least the specified number of voxels.")
-                .setDocumentation(
+              .setDocumentation(
 R"(Expand the active area by at least the specified number of voxels.  Does not support
 operation or setting of values.)"));
 
@@ -278,6 +281,13 @@ instead and activated as if they were specified as World Positions.)"));
                 .setTooltip("If turned on, activate with convex hull of points.")
                 .setDocumentation(
 R"(If turned on, only convex hull fo points are used for activation.)"));
+#if SYS_VERSION_MAJOR_INT >= 22
+    parms.add(hutil::ParmFactory(PRM_TOGGLE, "useimplicit", "Activate Using Implicit Surface")
+                .setDefault(PRMzeroDefaults)
+                .setTooltip("If turned on, activate with implicit surface from second input.")
+                .setDocumentation(
+R"(If turned on, the implicit surface from the second input is used for activation.)"));
+#endif
     parms.add(hutil::ParmFactory(PRM_STRING, "boundptgroup", "Convex Hull Group")
               .setChoiceList(&SOP_Node::pointGroupMenu)
               .setSpareData(SOP_Node::getGroupSelectButton(GA_GROUP_POINT,
@@ -418,10 +428,18 @@ SOP_VDBActivate::updateParmsFlags()
 #if UT_VERSION_INT >= 0x13050000        // 19.5 or later
     bool usevdb = evalInt("usevdb", 0, 0.0f);
     bool usehull = evalInt("usehull", 0, 0.0f);
-    changed += enableParm("usehull", has_bounds && !usevdb);
-    changed += enableParm("boundptgroup", has_bounds && !usevdb && usehull);
-    changed += enableParm("worldoffset", has_bounds && !usevdb && usehull);
-    changed += enableParm("voxeloffset", has_bounds && !usevdb && usehull);
+#if SYS_VERSION_MAJOR_INT >= 22
+    bool useimplicit = evalInt("useimplicit", 0, 0.0f);
+#else
+    bool useimplicit = false;
+#endif
+    changed += enableParm("usehull", has_bounds && !usevdb && !useimplicit);
+#if SYS_VERSION_MAJOR_INT >= 22
+    changed += enableParm("useimplicit", has_bounds && !usevdb && !usehull);
+#endif
+    changed += enableParm("boundptgroup", has_bounds && !usevdb && usehull && !useimplicit);
+    changed += enableParm("worldoffset", has_bounds && !usevdb && (usehull || useimplicit));
+    changed += enableParm("voxeloffset", has_bounds && !usevdb && (usehull || useimplicit));
 #endif
 
     changed += enableParm("operation", regionusesvalue);
@@ -1191,6 +1209,37 @@ SOP_VDBActivate::Cache::cookVDBSop(OP_Context &context)
                                              hullbbox);
                         }
 #endif
+#if SYS_VERSION_MAJOR_INT >= 22
+                        else if (evalInt("useimplicit", 0, t))
+                        {
+                            UT_BoundingBoxF bbox;
+                            bounds_src->getBBox(&bbox);
+                            bbox = UTvdbConvert(sopSopToIndexBBox(bbox, *vdb));
+
+                            GEO_ImplicitSurface<VEX_32> surface(*bounds_src);
+                            surface.applyIndexSpaceTransform(vdb->getIndexSpaceTransform());
+
+                            float voxelsize = vdb->getVoxelSize().maxComponent();
+                            float offset = evalFloat("voxeloffset", 0, t) + evalFloat("worldoffset", 0, t) / voxelsize;
+                            if (offset != 0.0)
+                            {
+                                // applying offset in voxelspace as we have already applied `applyIndexSpaceTransform`
+                                surface.applyOffset(offset);
+                            }
+
+                            float off = surface.offsetEstimate();
+                            bbox.expandBounds(off, off, off);
+
+                            UTvdbCallAllTopology(vdb->getStorageType(),
+                                             geoImplicitSurfaceActivateVDB,
+                                             vdb->getGrid(),
+                                             surface,
+                                             sopXlateOperation(OPERATION(t)),
+                                             evalInt("setvalue", 0, t),
+                                             evalFloat("value", 0, t),
+                                             bbox);
+                        }
+#endif
                         else
                         {
                             // Activate by bounding box.
@@ -1294,7 +1343,7 @@ SOP_VDBActivate::Cache::cookVDBSop(OP_Context &context)
 }
 
 const char *
-SOP_VDBActivate::inputLabel(unsigned index) const
+SOP_VDBActivate::inputLabel(OP_InputIdx index) const
 {
     switch (index)
     {
@@ -1307,7 +1356,7 @@ SOP_VDBActivate::inputLabel(unsigned index) const
 }
 
 int
-SOP_VDBActivate::isRefInput(unsigned i) const
+SOP_VDBActivate::isRefInput(OP_InputIdx i) const
 {
     switch (i)
     {

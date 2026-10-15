@@ -1,9 +1,11 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 #if defined(NANOVDB_USE_OPENVDB)
 
+#ifndef _USE_MATH_DEFINES
 #define _USE_MATH_DEFINES
+#endif
 #include <cmath>
 #include <chrono>
 
@@ -11,18 +13,13 @@
 #include <openvdb/math/Ray.h>
 #include <openvdb/tools/RayIntersector.h>
 
-#include <nanovdb/cuda/DeviceBuffer.h>
 #include <nanovdb/tools/NanoToOpenVDB.h>
 
 #include "common.h"
 
-#if defined(NANOVDB_USE_CUDA)
-using BufferT = nanovdb::cuda::DeviceBuffer;
-#else
 using BufferT = nanovdb::HostBuffer;
-#endif
 
-void runOpenVDB(nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer>& handle, int numIterations, int width, int height, BufferT& imageBuffer)
+void runOpenVDB(nanovdb::GridHandle<BufferT>& handle, int numIterations, int width, int height, BufferT& imageBuffer)
 {
     using GridT = openvdb::FloatGrid;
     using CoordT = openvdb::Coord;
@@ -31,18 +28,18 @@ void runOpenVDB(nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer>& handle, int nu
     using RayT = openvdb::math::Ray<RealT>;
 
 #if 1
-    auto srcGrid = nanovdb::tools::nanoToOpenVDB(handle);
+    openvdb::GridBase::Ptr srcGrid = nanovdb::tools::nanoToOpenVDB(handle);
     std::cout << "Exporting to OpenVDB grid[" << srcGrid->getName() << "]...\n";
 #else
     openvdb::initialize();
     std::string       filename = "C:/Users/william/Downloads/dragon.vdb";
     openvdb::io::File file(filename);
-    file.open(false); //disable delayed loading
+    file.open();
     auto srcGrid = file.readGrid<BufferT>("ls_dragon");
     std::cout << "Loading OpenVDB grid[" << srcGrid->getName() << "]...\n";
 #endif
 
-    auto h_grid = (GridT*)srcGrid.get();
+    GridT::Ptr h_grid = openvdb::GridBase::grid<GridT>(srcGrid);
 
     float* h_outImage = reinterpret_cast<float*>(imageBuffer.data());
 
@@ -85,7 +82,7 @@ void runOpenVDB(nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer>& handle, int nu
     {
         float durationAvg = 0;
         for (int i = 0; i < numIterations; ++i) {
-            float duration = renderImage(false, renderOp, width, height, h_outImage, h_grid);
+            float duration = renderImage(false, renderOp, width, height, h_outImage, h_grid.get());
             //std::cout << "Duration(OpenVDB-Host) = " << duration << " ms" << std::endl;
             durationAvg += duration;
         }

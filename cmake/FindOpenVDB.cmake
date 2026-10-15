@@ -1,5 +1,5 @@
 # Copyright Contributors to the OpenVDB Project
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 #[=======================================================================[.rst:
 
@@ -64,8 +64,6 @@ This will define the following variables:
   True if the OpenVDB Library has been built with log4cplus support
 ``OpenVDB_USES_IMATH_HALF``
   True if the OpenVDB Library has been built with Imath half support
-``OpenVDB_USES_DELAYED_LOADING``
-  True if the OpenVDB Library has been built with delayed-loading
 ``OpenVDB_ABI``
   Set if this module was able to determine the ABI number the located
   OpenVDB Library was built against. Unset otherwise.
@@ -109,7 +107,7 @@ may be provided to tell this module where to look.
 
 #]=======================================================================]
 
-cmake_minimum_required(VERSION 3.18)
+cmake_minimum_required(VERSION 3.24)
 include(GNUInstallDirs)
 
 
@@ -334,10 +332,8 @@ set(_OPENVDB_ORIG_CMAKE_FIND_LIBRARY_SUFFIXES ${CMAKE_FIND_LIBRARY_SUFFIXES})
 
 set(OPENVDB_PYTHON_PATH_SUFFIXES
   lib64/python
-  lib64/python2.7
   lib64/python3
   lib/python
-  lib/python2.7
   lib/python3
 )
 
@@ -491,37 +487,11 @@ endif()
 # Add standard dependencies
 
 find_package(TBB REQUIRED COMPONENTS tbb)
-find_package(Boost REQUIRED COMPONENTS iostreams)
 
 # Add deps for pyopenvdb
-# @todo track for numpy
 
 if(pyopenvdb IN_LIST OpenVDB_FIND_COMPONENTS)
   find_package(Python REQUIRED)
-
-  # Boost python handling - try and find both python and pythonXx (version suffixed).
-  # Prioritize the version suffixed library, failing if neither exist.
-
-  find_package(Boost ${MINIMUM_BOOST_VERSION}
-    QUIET COMPONENTS python${PYTHON_VERSION_MAJOR}${PYTHON_VERSION_MINOR}
-  )
-
-  if(TARGET Boost::python${PYTHON_VERSION_MAJOR}${PYTHON_VERSION_MINOR})
-    set(BOOST_PYTHON_LIB "python${PYTHON_VERSION_MAJOR}${PYTHON_VERSION_MINOR}")
-    message(STATUS "Found boost_python${PYTHON_VERSION_MAJOR}${PYTHON_VERSION_MINOR}")
-  else()
-    find_package(Boost ${MINIMUM_BOOST_VERSION} QUIET COMPONENTS python)
-    if(TARGET Boost::python)
-      set(BOOST_PYTHON_LIB "python")
-      message(STATUS "Found non-suffixed boost_python, assuming to be python version "
-        "\"${PYTHON_VERSION_MAJOR}.${PYTHON_VERSION_MINOR}\" compatible"
-      )
-    else()
-      message(FATAL_ERROR "Unable to find boost_python or "
-        "boost_python${PYTHON_VERSION_MAJOR}${PYTHON_VERSION_MINOR}."
-      )
-    endif()
-  endif()
 endif()
 
 # Add deps for openvdb_ax
@@ -550,7 +520,6 @@ set(OpenVDB_USES_BLOSC ${USE_BLOSC})
 set(OpenVDB_USES_ZLIB ${USE_ZLIB})
 set(OpenVDB_USES_LOG4CPLUS ${USE_LOG4CPLUS})
 set(OpenVDB_USES_IMATH_HALF ${USE_IMATH_HALF})
-set(OpenVDB_USES_DELAYED_LOADING ${OPENVDB_USE_DELAYED_LOADING})
 set(OpenVDB_DEFINITIONS)
 
 if(WIN32)
@@ -583,7 +552,6 @@ if(_OPENVDB_HAS_NEW_VERSION_HEADER)
   OPENVDB_GET_VERSION_DEFINE(${_OPENVDB_VERSION_HEADER} "OPENVDB_USE_IMATH_HALF" OpenVDB_USES_IMATH_HALF)
   OPENVDB_GET_VERSION_DEFINE(${_OPENVDB_VERSION_HEADER} "OPENVDB_USE_BLOSC" OpenVDB_USES_BLOSC)
   OPENVDB_GET_VERSION_DEFINE(${_OPENVDB_VERSION_HEADER} "OPENVDB_USE_ZLIB" OpenVDB_USES_ZLIB)
-  OPENVDB_GET_VERSION_DEFINE(${_OPENVDB_VERSION_HEADER} "OPENVDB_USE_DELAYED_LOADING" OpenVDB_USES_DELAYED_LOADING)
 elseif(NOT OPENVDB_USE_STATIC_LIBS)
   # Use GetPrerequisites to see which libraries this OpenVDB lib has linked to
   # which we can query for optional deps. This basically runs ldd/otoll/objdump
@@ -630,11 +598,6 @@ elseif(NOT OPENVDB_USE_STATIC_LIBS)
     if(NOT ${_HAS_DEP} EQUAL -1)
       set(OpenVDB_USES_IMATH_HALF ON)
     endif()
-
-    string(FIND ${PREREQUISITE} "boost_iostreams" _HAS_DEP)
-    if(NOT ${_HAS_DEP} EQUAL -1)
-      set(OpenVDB_USES_DELAYED_LOADING ON)
-    endif()
   endforeach()
 
   unset(_OPENVDB_PREREQUISITE_LIST)
@@ -666,11 +629,6 @@ endif()
 # from shared installs (including houdini) may pull in the wrong headers
 
 set(_OPENVDB_VISIBLE_DEPENDENCIES "")
-
-if(OpenVDB_USES_DELAYED_LOADING)
-  list(APPEND _OPENVDB_VISIBLE_DEPENDENCIES Boost::iostreams)
-  list(APPEND OpenVDB_DEFINITIONS OPENVDB_USE_DELAYED_LOADING)
-endif()
 
 if(OpenVDB_USES_IMATH_HALF)
   list(APPEND _OPENVDB_VISIBLE_DEPENDENCIES Imath::Imath)
@@ -766,7 +724,7 @@ if(OpenVDB_pyopenvdb_LIBRARY)
     set_target_properties(OpenVDB::pyopenvdb PROPERTIES
       IMPORTED_LOCATION "${OpenVDB_pyopenvdb_LIBRARY}"
       INTERFACE_INCLUDE_DIRECTORIES "${OpenVDB_pyopenvdb_INCLUDE_DIR};${PYTHON_INCLUDE_DIR}"
-      INTERFACE_LINK_LIBRARIES "OpenVDB::openvdb;Boost::${BOOST_PYTHON_LIB};${PYTHON_LIBRARIES}"
+      INTERFACE_LINK_LIBRARIES "OpenVDB::openvdb;${PYTHON_LIBRARIES}"
       INTERFACE_COMPILE_FEATURES cxx_std_17
    )
   endif()

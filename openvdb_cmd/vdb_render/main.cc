@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 //
 /// @file main.cc
 ///
@@ -768,7 +768,7 @@ main(int argc, char *argv[])
                 }
             } else {
                 // If no grid was specified by name, retrieve the first float grid from the file.
-                file.open(/*delayLoad=*/false);
+                file.open();
                 openvdb::io::File::NameIterator it = file.beginName();
                 openvdb::GridPtrVecPtr grids = file.readAllGridMetadata();
                 for (size_t i = 0; i < grids->size(); ++i, ++it) {

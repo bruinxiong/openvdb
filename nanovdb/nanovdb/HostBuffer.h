@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /*!
     @file nanovdb/HostBuffer.h
@@ -87,6 +87,7 @@
 #include <cassert>//           for assert
 #include <sstream>//           for std::stringstream
 #include <cstring>//           for memcpy
+#include <type_traits>//       for std::void_t
 
 #define checkPtr(ptr, msg) \
     { \
@@ -98,8 +99,73 @@ namespace nanovdb {
 template<typename BufferT>
 struct BufferTraits
 {
-    static constexpr bool hasDeviceDual = false;
+    static constexpr bool hasDeviceDual   = false;
+    static constexpr bool hasDeviceSingle = false;
 };
+
+/// @brief Detects whether @c BufferTraits<BufferT> defines @c hasDeviceSingle,
+///        i.e. whether the buffer manages a single device-resident allocation.
+/// @details Defaults to false when the trait member is absent, so pre-existing
+///          BufferTraits specializations (in or out of tree) that only define
+///          hasDeviceDual keep compiling unchanged.
+template<typename BufferT, typename = void>
+struct BufferHasDeviceSingle { static constexpr bool value = false; };
+template<typename BufferT>
+struct BufferHasDeviceSingle<BufferT, std::void_t<decltype(BufferTraits<BufferT>::hasDeviceSingle)>>
+{ static constexpr bool value = BufferTraits<BufferT>::hasDeviceSingle; };
+
+/// @brief Companion detection for BufferTraits<...>::hasHostSingle: a
+///        single-space buffer whose storage is host-accessible (e.g. a
+///        pinned-resource cuda::Buffer).
+template<typename BufferT, typename = void>
+struct BufferHasHostSingle { static constexpr bool value = false; };
+template<typename BufferT>
+struct BufferHasHostSingle<BufferT, std::void_t<decltype(BufferTraits<BufferT>::hasHostSingle)>>
+{ static constexpr bool value = BufferTraits<BufferT>::hasHostSingle; };
+
+/// @brief A single-space buffer whose storage the host cannot read: the
+///        device-single family minus its host-accessible members (managed or
+///        pinned resources). This is the predicate that gates the handles'
+///        host accessors off.
+template<typename BufferT>
+struct BufferIsDeviceOnly
+{ static constexpr bool value = BufferHasDeviceSingle<BufferT>::value && !BufferHasHostSingle<BufferT>::value; };
+
+/// @brief Detects whether a buffer exposes a retained stream (a stream()
+///        member), i.e. whether its resource is stream-ordered. Used to pick
+///        the buffer's stream-taking constructor without naming CUDA types.
+template<typename BufferT, typename = void>
+struct BufferHasStream { static constexpr bool value = false; };
+template<typename BufferT>
+struct BufferHasStream<BufferT, std::void_t<decltype(std::declval<const BufferT&>().stream())>>
+{ static constexpr bool value = true; };
+
+/// @brief Detects whether a buffer's elements are byte-sized. Buffers that
+///        expose no ElementType (e.g. HostBuffer) address raw bytes by
+///        definition, so the primary defaults to true.
+template<typename BufferT, typename = void>
+struct BufferHasByteElements { static constexpr bool value = true; };
+template<typename BufferT>
+struct BufferHasByteElements<BufferT, std::void_t<typename BufferT::ElementType>>
+{ static constexpr bool value = sizeof(typename BufferT::ElementType) == 1; };
+
+/// @brief Detects whether a buffer type is default-constructible, so
+///        consumers can name that requirement in a static_assert instead of
+///        failing wherever the default construction happens to occur.
+template<typename BufferT, typename = void>
+struct BufferIsDefaultConstructible { static constexpr bool value = false; };
+template<typename BufferT>
+struct BufferIsDefaultConstructible<BufferT, std::void_t<decltype(BufferT())>>
+{ static constexpr bool value = true; };
+
+/// @brief Detects whether a buffer provides destroy(), the cuda::Buffer
+///        spelling for releasing its storage. Handle reset() dispatches to it
+///        when present and falls back to the legacy clear() otherwise.
+template<typename BufferT, typename = void>
+struct BufferHasDestroy { static constexpr bool value = false; };
+template<typename BufferT>
+struct BufferHasDestroy<BufferT, std::void_t<decltype(std::declval<BufferT&>().destroy())>>
+{ static constexpr bool value = true; };
 
 // ----------------------------> HostBuffer <--------------------------------------
 
@@ -191,6 +257,13 @@ public:
     const void* data() const { return mData; }
     void* data() { return mData; }
     //@}
+
+    /// @brief Returns an offset pointer of a specific type from the allocated host memory
+    /// @tparam T Type of the pointer returned
+    /// @param count Numbers of elements of @c parameter type T to skip
+    /// @warning might return NULL
+    template <typename T>
+    T* data(ptrdiff_t count = 0) const {return mData ? reinterpret_cast<T*>(mData) + count : nullptr;}
 
     //@{
     /// @brief Returns the size in bytes associated with this buffer.
@@ -316,7 +389,6 @@ struct HostBuffer::Pool
                << mSize << " bytes of which\n\t" << (util::PtrDiff(alignedFree, mData) - mPadding)
                << " bytes are used by " << mRegister.size() << " other buffer(s). "
                << "Pool is " << (mManaged ? "internally" : "externally") << " managed.\n";
-            //std::cerr << ss.str();
             throw std::runtime_error(ss.str());
         }
         buffer->mSize = size;
@@ -389,7 +461,6 @@ struct HostBuffer::Pool
             }
 
             for (HostBuffer* buffer : mRegister) { // update registered buffers
-                //buffer->mData = paddedData + ptrdiff_t(buffer->mData - (mData + mPadding));
                 buffer->mData = util::PtrAdd(paddedData, util::PtrDiff(buffer->mData, util::PtrAdd(mData, mPadding)));
             }
             mFree = util::PtrAdd(paddedData, memUsage); // update the free pointer
@@ -414,12 +485,8 @@ private:
 
     static void* alloc(uint64_t size)
     {
-//#if (__cplusplus >= 201703L)
-//    return std::aligned_alloc(NANOVDB_DATA_ALIGNMENT, size);//C++17 or newer
-//#else
     // make sure we alloc enough space to align the result
     return std::malloc(size + NANOVDB_DATA_ALIGNMENT);
-//#endif
     }
 
     static void* realloc(void* const origData,

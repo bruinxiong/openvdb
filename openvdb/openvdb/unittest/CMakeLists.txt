@@ -1,5 +1,5 @@
 # Copyright Contributors to the OpenVDB Project
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 #[=======================================================================[
 
@@ -7,7 +7,7 @@
 
 #]=======================================================================]
 
-cmake_minimum_required(VERSION 3.18)
+cmake_minimum_required(VERSION 3.24)
 project(OpenVDBUnitTests LANGUAGES CXX)
 
 include(GNUInstallDirs)
@@ -68,7 +68,7 @@ set(UNITTEST_SOURCE_FILES
 
 if(OPENVDB_TESTS)
   foreach(test ${OPENVDB_TESTS})
-    file(GLOB UNITTEST_GLOB CONFIGURE_DEPENDS Test${test}*.cc)
+    file(GLOB UNITTEST_GLOB CONFIGURE_DEPENDS Test${test}.cc)
     list(APPEND UNITTEST_SOURCE_FILES
       ${UNITTEST_GLOB}
     )
@@ -82,12 +82,12 @@ else()
     TestAttributeSet.cc
     TestBBox.cc
     TestClip.cc
+    TestCodec.cc
     TestConjGradient.cc
     TestCoord.cc
     TestCount.cc
     TestCpt.cc
     TestCurl.cc
-    TestDelayedLoadMetadata.cc
     TestDense.cc
     TestDenseSparseTools.cc
     TestDiagnostics.cc
@@ -110,6 +110,7 @@ else()
     TestInit.cc
     TestInt32Metadata.cc
     TestInt64Metadata.cc
+    TestInternalNode.cc
     TestInternalOrigin.cc
     TestLaplacian.cc
     TestLeaf.cc
@@ -118,7 +119,10 @@ else()
     TestLeafManager.cc
     TestLeafMask.cc
     TestLeafOrigin.cc
+    TestLevelSetDilatedMesh.cc
+    TestLevelSetFilter.cc
     TestLevelSetRayIntersector.cc
+    TestLevelSetTubes.cc
     TestLevelSetUtil.cc
     TestLinearInterp.cc
     TestMaps.cc
@@ -139,8 +143,10 @@ else()
     TestNodeVisitor.cc
     TestParticleAtlas.cc
     TestParticlesToLevelSet.cc
+    TestPCA.cc
     TestPointAdvect.cc
     TestPointAttribute.cc
+    TestPointCodec.cc
     TestPointConversion.cc
     TestPointCount.cc
     TestPointDataLeaf.cc
@@ -166,6 +172,8 @@ else()
     TestQuantizedUnitVec.cc
     TestQuat.cc
     TestRay.cc
+    TestRootNode.cc
+    TestSimd.cc
     TestStats.cc
     TestStencils.cc
     TestStream.cc

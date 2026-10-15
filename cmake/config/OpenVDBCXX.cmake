@@ -1,5 +1,5 @@
 # Copyright Contributors to the OpenVDB Project
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 #[=======================================================================[
 
@@ -7,7 +7,7 @@
 
 #]=======================================================================]
 
-cmake_minimum_required(VERSION 3.18)
+cmake_minimum_required(VERSION 3.24)
 
 ###############################################################################
 
@@ -30,28 +30,6 @@ endif()
 if(OPENVDB_FUTURE_DEPRECATION AND FUTURE_MINIMUM_CXX_STANDARD)
   if(CMAKE_CXX_STANDARD LESS ${FUTURE_MINIMUM_CXX_STANDARD})
     message(DEPRECATION "C++ < 17 is deprecated and will be removed.")
-  endif()
-endif()
-
-# Configure MS Runtime
-
-if(WIN32 AND CMAKE_MSVC_RUNTIME_LIBRARY)
-  message(STATUS "CMAKE_MSVC_RUNTIME_LIBRARY set to target ${CMAKE_MSVC_RUNTIME_LIBRARY}")
-
-  # Configure Boost library varient on Windows
-  if(NOT Boost_USE_STATIC_RUNTIME)
-    set(Boost_USE_STATIC_RUNTIME OFF)
-    if(CMAKE_MSVC_RUNTIME_LIBRARY STREQUAL MultiThreaded OR
-       CMAKE_MSVC_RUNTIME_LIBRARY STREQUAL MultiThreadedDebug)
-      set(Boost_USE_STATIC_RUNTIME ON)
-    endif()
-  endif()
-  if(NOT Boost_USE_DEBUG_RUNTIME)
-    set(Boost_USE_DEBUG_RUNTIME OFF)
-    if(CMAKE_MSVC_RUNTIME_LIBRARY STREQUAL MultiThreadedDebugDLL OR
-       CMAKE_MSVC_RUNTIME_LIBRARY STREQUAL MultiThreadedDebug)
-      set(Boost_USE_DEBUG_RUNTIME ON)
-    endif()
   endif()
 endif()
 
@@ -127,6 +105,47 @@ endif()
 
 ###############################################################################
 
+# x86 ISA selection
+
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86)|(X86)|(amd64)|(AMD64)")
+  if(OPENVDB_X86_INSTRSET GREATER_EQUAL 1)
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-msse>")
+  endif()
+  if(OPENVDB_X86_INSTRSET GREATER_EQUAL 2)
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-msse2>")
+  endif()
+  if(OPENVDB_X86_INSTRSET GREATER_EQUAL 3)
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-msse3>")
+  endif()
+  if(OPENVDB_X86_INSTRSET GREATER_EQUAL 4)
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-mssse3>")
+  endif()
+  if(OPENVDB_X86_INSTRSET GREATER_EQUAL 5)
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-msse4.1>")
+  endif()
+  if(OPENVDB_X86_INSTRSET GREATER_EQUAL 6)
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-msse4.2>")
+  endif()
+  if(OPENVDB_X86_INSTRSET GREATER_EQUAL 7)
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-mavx>")
+  endif()
+  if(OPENVDB_X86_INSTRSET GREATER_EQUAL 8)
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-mavx2>")
+  endif()
+  if(OPENVDB_X86_INSTRSET GREATER_EQUAL 9)
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-mavx512f>")
+  endif()
+  if(OPENVDB_X86_INSTRSET GREATER_EQUAL 10)
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-mavx512bw>")
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-mavx512dq>")
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-mavx512vl>")
+  endif()
+elseif(OPENVDB_X86_INSTRSET GREATER 0)
+  message(WARNING "OPENVDB_X86_INSTRSET has been set but has no effect when building for ${CMAKE_SYSTEM_PROCESSOR}.")
+endif()
+
+###############################################################################
+
 # Increase the number of sections that an object file can contain
 add_compile_options("$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/bigobj>")
 # Enable MSVC options that make it behave like other compilers
@@ -184,20 +203,23 @@ if(OPENVDB_CXX_STRICT)
   add_compile_options("$<$<AND:$<CXX_COMPILER_ID:GNU>,$<VERSION_GREATER_EQUAL:$<CXX_COMPILER_VERSION>,9.3.0>>:-Wimplicit-fallthrough>")
   # Only check global constructors for libraries (we should really check for
   # executables too but gtest relies on these types of constructors for its
-  # framework).
-  add_compile_options("$<$<AND:$<NOT:$<STREQUAL:$<TARGET_PROPERTY:TYPE>,EXECUTABLE>>,$<COMPILE_LANG_AND_ID:CXX,Clang,AppleClang>>:-Wglobal-constructors>")
+  # framework). nanobind also incorporates these constructors so skip it as well.
+  add_compile_options("$<$<AND:$<NOT:$<OR:$<STREQUAL:$<TARGET_PROPERTY:TYPE>,EXECUTABLE>,$<STREQUAL:$<TARGET_PROPERTY:NAME>,nanobind-static>>>,$<COMPILE_LANG_AND_ID:CXX,Clang,AppleClang>>:-Wglobal-constructors>")
   add_compile_options("$<$<COMPILE_LANG_AND_ID:CXX,Clang,AppleClang>:-Wno-sign-conversion>")
   # GNU
   add_compile_options("$<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Werror>")
   add_compile_options("$<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wall>")
   add_compile_options("$<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wextra>")
-  add_compile_options("$<$<COMPILE_LANG_AND_ID:CXX,GNU>:-pedantic>")
   add_compile_options("$<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wcast-align>")
-  add_compile_options("$<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wcast-qual>")
-  add_compile_options("$<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wconversion>")
   add_compile_options("$<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wdisabled-optimization>")
   add_compile_options("$<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Woverloaded-virtual>")
   add_compile_options("$<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wnon-virtual-dtor>")
+  # Disable select warnings for the nanobind static library
+  add_compile_options("$<$<AND:$<NOT:$<OR:$<STREQUAL:$<TARGET_PROPERTY:NAME>,nanobind-static>,$<STREQUAL:$<TARGET_PROPERTY:NAME>,openvdb_python>,$<STREQUAL:$<TARGET_PROPERTY:NAME>,nanovdb_python>>>,$<COMPILE_LANG_AND_ID:CXX,GNU>>:-pedantic>")
+  add_compile_options("$<$<AND:$<NOT:$<OR:$<STREQUAL:$<TARGET_PROPERTY:NAME>,nanobind-static>,$<STREQUAL:$<TARGET_PROPERTY:NAME>,openvdb_python>,$<STREQUAL:$<TARGET_PROPERTY:NAME>,nanovdb_python>>>,$<COMPILE_LANG_AND_ID:CXX,GNU>>:-Wcast-qual>")
+  add_compile_options("$<$<AND:$<NOT:$<OR:$<STREQUAL:$<TARGET_PROPERTY:NAME>,nanobind-static>,$<STREQUAL:$<TARGET_PROPERTY:NAME>,openvdb_python>,$<STREQUAL:$<TARGET_PROPERTY:NAME>,nanovdb_python>>>,$<COMPILE_LANG_AND_ID:CXX,GNU>>:-Wconversion>")
+  add_compile_options("$<$<AND:$<OR:$<STREQUAL:$<TARGET_PROPERTY:NAME>,nanobind-static>,$<STREQUAL:$<TARGET_PROPERTY:NAME>,openvdb_python>,$<STREQUAL:$<TARGET_PROPERTY:NAME>,nanovdb_python>>,$<COMPILE_LANG_AND_ID:CXX,GNU>>:-Wno-unused-variable>")
+  add_compile_options("$<$<AND:$<OR:$<STREQUAL:$<TARGET_PROPERTY:NAME>,nanobind-static>,$<STREQUAL:$<TARGET_PROPERTY:NAME>,openvdb_python>,$<STREQUAL:$<TARGET_PROPERTY:NAME>,nanovdb_python>>,$<COMPILE_LANG_AND_ID:CXX,GNU>>:-Wno-unused-but-set-parameter>")
 else()
   # NO OPENVDB_CXX_STRICT, suppress some warnings
   if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")

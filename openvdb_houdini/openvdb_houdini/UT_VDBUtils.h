@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /*
  * Copyright (c) Side Effects Software Inc.
@@ -49,6 +49,11 @@ enum UT_VDBType
 #include <UT/UT_Matrix2.h>
 #include <SYS/SYS_Math.h>
 
+UT_API size_t
+UTformatBuffer(char *buffer, size_t buffer_size, const UT_VDBType &v);
+
+UT_API const char *UTvdbType(UT_VDBType t);
+UT_API UT_VDBType UTvdbType(const char *n);
 
 /// Calls openvdb::initialize()
 inline void UTvdbInitialize() { openvdb::initialize(); }

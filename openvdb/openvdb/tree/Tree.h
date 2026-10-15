@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /// @file tree/Tree.h
 
@@ -95,14 +95,12 @@ public:
 
     virtual void getIndexRange(CoordBBox& bbox) const = 0;
 
-    /// @brief Replace with background tiles any nodes whose voxel buffers
-    /// have not yet been allocated.
-    /// @details Typically, unallocated nodes are leaf nodes whose voxel buffers
-    /// are not yet resident in memory because delayed loading is in effect.
-    /// @sa readNonresidentBuffers, io::File::open
     virtual void clipUnallocatedNodes() = 0;
-    /// Return the total number of unallocated leaf nodes residing in this tree.
+#if OPENVDB_ABI_VERSION_NUMBER >= 12
+    virtual Index64 unallocatedLeafCount() const = 0;
+#else
     virtual Index32 unallocatedLeafCount() const = 0;
+#endif
 
 
     //
@@ -113,13 +111,25 @@ public:
     /// A tree with only a root node and leaf nodes has depth 2, for example.
     virtual Index treeDepth() const = 0;
     /// Return the number of leaf nodes.
+#if OPENVDB_ABI_VERSION_NUMBER >= 12
+    virtual Index64 leafCount() const = 0;
+#else
     virtual Index32 leafCount() const = 0;
+#endif
     /// Return a vector with node counts. The number of nodes of type NodeType
     /// is given as element NodeType::LEVEL in the return vector. Thus, the size
     /// of this vector corresponds to the height (or depth) of this tree.
+#if OPENVDB_ABI_VERSION_NUMBER >= 12
+    virtual std::vector<Index64> nodeCount() const = 0;
+#else
     virtual std::vector<Index32> nodeCount() const = 0;
+#endif
     /// Return the number of non-leaf nodes.
+#if OPENVDB_ABI_VERSION_NUMBER >= 12
+    virtual Index64 nonLeafCount() const = 0;
+#else
     virtual Index32 nonLeafCount() const = 0;
+#endif
     /// Return the number of active voxels stored in leaf nodes.
     virtual Index64 activeLeafVoxelCount() const = 0;
     /// Return the number of inactive voxels stored in leaf nodes.
@@ -134,31 +144,30 @@ public:
     /// Return the total amount of memory in bytes occupied by this tree.
     virtual Index64 memUsage() const { return 0; }
 
-
+#if OPENVDB_ABI_VERSION_NUMBER < 14
     //
     // I/O methods
     //
     /// @brief Read the tree topology from a stream.
     ///
     /// This will read the tree structure and tile values, but not voxel data.
-    virtual void readTopology(std::istream&, bool saveFloatAsHalf = false);
+    virtual void readTopology(std::istream&, bool saveFloatAsHalf = false) = 0;
     /// @brief Write the tree topology to a stream.
     ///
     /// This will write the tree structure and tile values, but not voxel data.
-    virtual void writeTopology(std::ostream&, bool saveFloatAsHalf = false) const;
+    virtual void writeTopology(std::ostream&, bool saveFloatAsHalf = false) const = 0;
 
     /// Read all data buffers for this tree.
     virtual void readBuffers(std::istream&, bool saveFloatAsHalf = false) = 0;
     /// Read all of this tree's data buffers that intersect the given bounding box.
     virtual void readBuffers(std::istream&, const CoordBBox&, bool saveFloatAsHalf = false) = 0;
-    /// @brief Read all of this tree's data buffers that are not yet resident in memory
-    /// (because delayed loading is in effect).
-    /// @details If this tree was read from a memory-mapped file, this operation
-    /// disconnects the tree from the file.
-    /// @sa clipUnallocatedNodes, io::File::open, io::MappedFile
+
+    OPENVDB_DEPRECATED_MESSAGE("This method is deprecated and will be removed. Delayed loading is no longer supported.")
     virtual void readNonresidentBuffers() const = 0;
+
     /// Write out all the data buffers for this tree.
     virtual void writeBuffers(std::ostream&, bool saveFloatAsHalf = false) const = 0;
+#endif
 
     /// @brief Print statistics, memory usage and other information about this tree.
     /// @param os            a stream to which to write textual information
@@ -187,6 +196,11 @@ public:
     using LeafNodeType = typename RootNodeType::LeafNodeType;
 
     static const Index DEPTH = RootNodeType::LEVEL + 1;
+
+    using Accessor            = ValueAccessor<Tree, true>;
+    using ConstAccessor       = ValueAccessor<const Tree, true>;
+    using UnsafeAccessor      = ValueAccessor<Tree, false>;
+    using ConstUnsafeAccessor = ValueAccessor<const Tree, false>;
 
     /// @brief ValueConverter<T>::Type is the type of a tree having the same
     /// hierarchy as this tree but a different value type, T.
@@ -302,7 +316,7 @@ public:
     /// @note Because RootNodes are resizable, the RootNode Log2Dim is 0 for all trees.
     static void getNodeLog2Dims(std::vector<Index>& dims);
 
-
+#if OPENVDB_ABI_VERSION_NUMBER < 14
     //
     // I/O methods
     //
@@ -318,14 +332,13 @@ public:
     void readBuffers(std::istream&, bool saveFloatAsHalf = false) override;
     /// Read all of this tree's data buffers that intersect the given bounding box.
     void readBuffers(std::istream&, const CoordBBox&, bool saveFloatAsHalf = false) override;
-    /// @brief Read all of this tree's data buffers that are not yet resident in memory
-    /// (because delayed loading is in effect).
-    /// @details If this tree was read from a memory-mapped file, this operation
-    /// disconnects the tree from the file.
-    /// @sa clipUnallocatedNodes, io::File::open, io::MappedFile
-    void readNonresidentBuffers() const override;
+
+    OPENVDB_DEPRECATED_MESSAGE("This method is deprecated and will be removed. Delayed loading is no longer supported.")
+    void readNonresidentBuffers() const override { }
+
     /// Write out all data buffers for this tree.
     void writeBuffers(std::ostream&, bool saveFloatAsHalf = false) const override;
+#endif // OPENVDB_ABI_VERSION_NUMBER < 14
 
     void print(std::ostream& os = std::cout, int verboseLevel = 1) const override;
 
@@ -338,18 +351,37 @@ public:
     /// A tree with only a root node and leaf nodes has depth 2, for example.
     Index treeDepth() const override { return DEPTH; }
     /// Return the number of leaf nodes.
-    Index32 leafCount() const override { return mRoot.leafCount(); }
+#if OPENVDB_ABI_VERSION_NUMBER >= 12
+    Index64 leafCount() const override { return mRoot.leafCount(); }
+#else
+    Index32 leafCount() const override { return static_cast<Index32>(mRoot.leafCount()); }
+#endif
     /// Return a vector with node counts. The number of nodes of type NodeType
     /// is given as element NodeType::LEVEL in the return vector. Thus, the size
     /// of this vector corresponds to the height (or depth) of this tree.
-    std::vector<Index32> nodeCount() const override
+#if OPENVDB_ABI_VERSION_NUMBER >= 12
+    std::vector<Index64> nodeCount() const override
     {
-        std::vector<Index32> vec(DEPTH, 0);
+        std::vector<Index64> vec(DEPTH, 0);
         mRoot.nodeCount( vec );
         return vec;// Named Return Value Optimization
     }
+#else
+    std::vector<Index32> nodeCount() const override
+    {
+        std::vector<Index32> vec(DEPTH, 0);
+        OPENVDB_NO_DEPRECATION_WARNING_BEGIN
+        mRoot.nodeCount( vec );
+        OPENVDB_NO_DEPRECATION_WARNING_END
+        return vec;// Named Return Value Optimization
+    }
+#endif
     /// Return the number of non-leaf nodes.
-    Index32 nonLeafCount() const override { return mRoot.nonLeafCount(); }
+#if OPENVDB_ABI_VERSION_NUMBER >= 12
+    Index64 nonLeafCount() const override { return mRoot.nonLeafCount(); }
+#else
+    Index32 nonLeafCount() const override { return static_cast<Index32>(mRoot.nonLeafCount()); }
+#endif
     /// Return the number of active voxels stored in leaf nodes.
     Index64 activeLeafVoxelCount() const override { return tools::countActiveLeafVoxels(*this); }
     /// Return the number of inactive voxels stored in leaf nodes.
@@ -360,10 +392,6 @@ public:
     Index64 inactiveVoxelCount() const override { return tools::countInactiveVoxels(*this); }
     /// Return the total number of active tiles.
     Index64 activeTileCount() const override { return tools::countActiveTiles(*this); }
-
-    /// Return the minimum and maximum active values in this tree.
-    OPENVDB_DEPRECATED_MESSAGE("Switch to tools::minMax. Use threaded = false for serial execution")
-    void evalMinMax(ValueType &min, ValueType &max) const;
 
     Index64 memUsage() const override { return tools::memUsage(*this); }
 
@@ -458,13 +486,14 @@ public:
     void clip(const CoordBBox&);
     /// @brief Replace with background tiles any nodes whose voxel buffers
     /// have not yet been allocated.
-    /// @details Typically, unallocated nodes are leaf nodes whose voxel buffers
-    /// are not yet resident in memory because delayed loading is in effect.
-    /// @sa readNonresidentBuffers, io::File::open
     void clipUnallocatedNodes() override;
 
     /// Return the total number of unallocated leaf nodes residing in this tree.
+#if OPENVDB_ABI_VERSION_NUMBER >= 12
+    Index64 unallocatedLeafCount() const override;
+#else
     Index32 unallocatedLeafCount() const override;
+#endif
 
     //@{
     /// @brief Set all voxels within a given axis-aligned box to a constant value.
@@ -622,6 +651,31 @@ public:
 
     /// Remove all tiles from this tree and all nodes other than the root node.
     void clear();
+
+    /// @brief Return an accessor that provides random read and write access
+    /// to this tree's voxels.
+    /// @details The accessor is safe in the sense that it is registered with this tree.
+    Accessor getAccessor();
+    /// @brief Return an unsafe accessor that provides random read and write access
+    /// to this tree's voxels.
+    /// @details The accessor is unsafe in the sense that it is not registered
+    /// with this tree's tree.  In some rare cases this can give a performance advantage
+    /// over a registered accessor, but it is unsafe if the tree topology is modified.
+    /// @warning Only use this method if you're an expert and know the
+    /// risks of using an unregistered accessor (see tree/ValueAccessor.h)
+    UnsafeAccessor getUnsafeAccessor();
+    /// Return an accessor that provides random read-only access to this tree's voxels.
+    ConstAccessor getAccessor() const;
+    /// Return an accessor that provides random read-only access to this tree's voxels.
+    ConstAccessor getConstAccessor() const;
+    /// @brief Return an unsafe accessor that provides random read-only access
+    /// to this tree's voxels.
+    /// @details The accessor is unsafe in the sense that it is not registered
+    /// with this tree.  In some rare cases this can give a performance advantage
+    /// over a registered accessor, but it is unsafe if the tree topology is modified.
+    /// @warning Only use this method if you're an expert and know the
+    /// risks of using an unregistered accessor (see tree/ValueAccessor.h)
+    ConstUnsafeAccessor getConstUnsafeAccessor();
 
     /// Clear all registered accessors.
     void clearAllAccessors();
@@ -1076,23 +1130,6 @@ struct Tree5 {
 
 
 inline void
-TreeBase::readTopology(std::istream& is, bool /*saveFloatAsHalf*/)
-{
-    int32_t bufferCount;
-    is.read(reinterpret_cast<char*>(&bufferCount), sizeof(int32_t));
-    if (bufferCount != 1) OPENVDB_LOG_WARN("multi-buffer trees are no longer supported");
-}
-
-
-inline void
-TreeBase::writeTopology(std::ostream& os, bool /*saveFloatAsHalf*/) const
-{
-    int32_t bufferCount = 1;
-    os.write(reinterpret_cast<char*>(&bufferCount), sizeof(int32_t));
-}
-
-
-inline void
 TreeBase::print(std::ostream& os, int /*verboseLevel*/) const
 {
     os << "    Tree Type: " << type()
@@ -1213,12 +1250,16 @@ Tree<RootNodeType>::cbegin() const
 ////////////////////////////////////////
 
 
+#if OPENVDB_ABI_VERSION_NUMBER < 14
+
 template<typename RootNodeType>
 void
 Tree<RootNodeType>::readTopology(std::istream& is, bool saveFloatAsHalf)
 {
     this->clearAllAccessors();
-    TreeBase::readTopology(is, saveFloatAsHalf);
+    int32_t bufferCount;
+    is.read(reinterpret_cast<char*>(&bufferCount), sizeof(int32_t));
+    if (bufferCount != 1) OPENVDB_LOG_WARN("multi-buffer trees are no longer supported");
     mRoot.readTopology(is, saveFloatAsHalf);
 }
 
@@ -1227,7 +1268,8 @@ template<typename RootNodeType>
 void
 Tree<RootNodeType>::writeTopology(std::ostream& os, bool saveFloatAsHalf) const
 {
-    TreeBase::writeTopology(os, saveFloatAsHalf);
+    int32_t bufferCount = 1;
+    os.write(reinterpret_cast<char*>(&bufferCount), sizeof(int32_t));
     mRoot.writeTopology(os, saveFloatAsHalf);
 }
 
@@ -1252,21 +1294,12 @@ Tree<RootNodeType>::readBuffers(std::istream &is, const CoordBBox& bbox, bool sa
 
 template<typename RootNodeType>
 inline void
-Tree<RootNodeType>::readNonresidentBuffers() const
-{
-    for (LeafCIter it = this->cbeginLeaf(); it; ++it) {
-        // Retrieving the value of a leaf voxel forces loading of the leaf node's voxel buffer.
-        it->getValue(Index(0));
-    }
-}
-
-
-template<typename RootNodeType>
-inline void
 Tree<RootNodeType>::writeBuffers(std::ostream &os, bool saveFloatAsHalf) const
 {
     mRoot.writeBuffers(os, saveFloatAsHalf);
 }
+
+#endif // OPENVDB_ABI_VERSION_NUMBER < 14
 
 
 template<typename RootNodeType>
@@ -1317,6 +1350,41 @@ Tree<RootNodeType>::clear()
 
 ////////////////////////////////////////
 
+
+template<typename RootNodeType>
+typename Tree<RootNodeType>::Accessor
+Tree<RootNodeType>::getAccessor()
+{
+    return Accessor(*this);
+}
+
+template<typename RootNodeType>
+typename Tree<RootNodeType>::UnsafeAccessor
+Tree<RootNodeType>::getUnsafeAccessor()
+{
+    return UnsafeAccessor(*this);
+}
+
+template<typename RootNodeType>
+typename Tree<RootNodeType>::ConstAccessor
+Tree<RootNodeType>::getAccessor() const
+{
+    return ConstAccessor(*this);
+}
+
+template<typename RootNodeType>
+typename Tree<RootNodeType>::ConstAccessor
+Tree<RootNodeType>::getConstAccessor() const
+{
+    return ConstAccessor(*this);
+}
+
+template<typename RootNodeType>
+typename Tree<RootNodeType>::ConstUnsafeAccessor
+Tree<RootNodeType>::getConstUnsafeAccessor()
+{
+    return ConstUnsafeAccessor(*this);
+}
 
 template<typename RootNodeType>
 inline void
@@ -1608,6 +1676,16 @@ Tree<RootNodeType>::clipUnallocatedNodes()
     }
 }
 
+#if OPENVDB_ABI_VERSION_NUMBER >= 12
+template<typename RootNodeType>
+inline Index64
+Tree<RootNodeType>::unallocatedLeafCount() const
+{
+    Index64 sum = 0;
+    for (auto it = this->cbeginLeaf(); it; ++it) if (!it->isAllocated()) ++sum;
+    return sum;
+}
+#else
 template<typename RootNodeType>
 inline Index32
 Tree<RootNodeType>::unallocatedLeafCount() const
@@ -1616,6 +1694,7 @@ Tree<RootNodeType>::unallocatedLeafCount() const
     for (auto it = this->cbeginLeaf(); it; ++it) if (!it->isAllocated()) ++sum;
     return sum;
 }
+#endif
 
 
 template<typename RootNodeType>
@@ -1901,22 +1980,6 @@ Tree<RootNodeType>::evalLeafDim(Coord& dim) const
 
 template<typename RootNodeType>
 inline void
-Tree<RootNodeType>::evalMinMax(ValueType& minVal, ValueType& maxVal) const
-{
-    minVal = maxVal = zeroVal<ValueType>();
-    if (ValueOnCIter iter = this->cbeginValueOn()) {
-        minVal = maxVal = *iter;
-        for (++iter; iter; ++iter) {
-            const ValueType& val = *iter;
-            if (math::cwiseLessThan(val, minVal)) minVal = val;
-            if (math::cwiseGreaterThan(val, maxVal)) maxVal = val;
-        }
-    }
-}
-
-
-template<typename RootNodeType>
-inline void
 Tree<RootNodeType>::getNodeLog2Dims(std::vector<Index>& dims)
 {
     dims.clear();
@@ -1930,7 +1993,6 @@ Tree<RootNodeType>::print(std::ostream& os, int verboseLevel) const
 {
     if (verboseLevel <= 0) return;
 
-    /// @todo Consider using boost::io::ios_precision_saver instead.
     struct OnExit {
         std::ostream& os;
         std::streamsize savedPrecision;
@@ -1971,7 +2033,7 @@ Tree<RootNodeType>::print(std::ostream& os, int verboseLevel) const
     }
 
     const auto nodeCount = this->nodeCount();//fast
-    const Index32 leafCount = nodeCount.front();// leaf is the first element
+    const Index64 leafCount = nodeCount.front();// leaf is the first element
     OPENVDB_ASSERT(dims.size() == nodeCount.size());
 
     Index64 totalNodeCount = 0;

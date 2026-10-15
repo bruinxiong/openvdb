@@ -1,4 +1,6 @@
-cmake_minimum_required(VERSION 3.18)
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
+cmake_minimum_required(VERSION 3.24)
 
 # CMP0091 allows for MSVC ABI targetting via CMAKE_MSVC_RUNTIME_LIBRARY
 # from CMake 3.15 and above. Must come before project().
@@ -26,7 +28,7 @@ list(APPEND CMAKE_MODULE_PATH ${OPENVDB_CMAKE_PATH})
 add_library(vdb_tool_common INTERFACE)
 
 # Optional components
-option(BUILD_TEST "Build unit tests" OFF)
+option(OPENVDB_BUILD_VDB_TOOL_UNITTESTS "Build unit tests" OFF)
 
 option(OPENVDB_TOOL_USE_NANO "Compile with NanoVDB support" OFF)
 option(OPENVDB_TOOL_NANO_USE_ZIP "Compile NanoVDB with zip compression support. Requires OPENVDB_TOOL_USE_NANO=ON to have effect" ON)
@@ -34,26 +36,36 @@ option(OPENVDB_TOOL_NANO_USE_BLOSC "Compile NanoVDB with Blosc compression suppo
 option(OPENVDB_TOOL_USE_PNG "Compile with PNG support" OFF)
 option(OPENVDB_TOOL_USE_EXR "Compile with EXR support" OFF)
 option(OPENVDB_TOOL_USE_JPG "Compile with JPG support" OFF)
+option(OPENVDB_TOOL_USE_MPEG "Compile with MPEG support" OFF)
+option(OPENVDB_TOOL_USE_PDAL "Compile with extended points support" OFF)
 option(OPENVDB_TOOL_USE_ABC "Compile with Alembic support" OFF)
+option(OPENVDB_TOOL_USE_USD "Compile with OpenUSD geometry read support" OFF)
+option(OPENVDB_TOOL_USE_GLTF "Compile with glTF (.gltf / .glb) read support via tinygltf" OFF)
+option(OPENVDB_TOOL_USE_AX "Compile with the OpenVDB AX expression action (-ax). Requires the openvdb_ax library and LLVM" OFF)
 option(OPENVDB_TOOL_USE_ALL "Compile with all optional components" OFF)
 if(OPENVDB_TOOL_USE_ALL)
   set(OPENVDB_TOOL_USE_NANO ON)
   set(OPENVDB_TOOL_USE_PNG ON)
   set(OPENVDB_TOOL_USE_EXR ON)
   set(OPENVDB_TOOL_USE_JPG ON)
+  set(OPENVDB_TOOL_USE_MPEG ON)
   set(OPENVDB_TOOL_USE_ABC ON)
+  set(OPENVDB_TOOL_USE_PDAL ON)
+  set(OPENVDB_TOOL_USE_USD ON)
+  set(OPENVDB_TOOL_USE_GLTF ON)
+  set(OPENVDB_TOOL_USE_AX ON)
 endif()
 
 if(OPENVDB_TOOL_USE_NANO)
   target_compile_definitions(vdb_tool_common INTERFACE "VDB_TOOL_USE_NANO")
   if(OPENVDB_TOOL_NANO_USE_ZIP)
     target_compile_definitions(vdb_tool_common INTERFACE "NANOVDB_USE_ZIP")
-    find_package(ZLIB REQUIRED)
+    find_package(ZLIB ${MINIMUM_ZLIB_VERSION} REQUIRED)
     target_link_libraries(vdb_tool_common INTERFACE ZLIB::ZLIB)
   endif()
   if(OPENVDB_TOOL_NANO_USE_BLOSC)
     target_compile_definitions(vdb_tool_common INTERFACE "NANOVDB_USE_BLOSC")
-    find_package(Blosc REQUIRED)
+    find_package(Blosc ${MINIMUM_BLOSC_VERSION} REQUIRED)
     target_link_libraries(vdb_tool_common INTERFACE blosc)
   endif()
   #target_include_directories(vdb_tool_common INTERFACE ${PROJECT_SOURCE_DIR}/../nanovdb/)
@@ -83,6 +95,18 @@ if(OPENVDB_TOOL_USE_PNG)
   target_link_libraries(vdb_tool_common INTERFACE png)
 endif()
 
+if(OPENVDB_TOOL_USE_PDAL)
+  target_compile_definitions(vdb_tool_common INTERFACE "VDB_TOOL_USE_PDAL")
+  if(WIN32)
+    find_package(libdpal CONFIG REQUIRED)
+  else()
+    find_package(PDAL REQUIRED)
+  endif()
+  message(STATUS "PDAL: ${PDAL_LIBRARIES} ${PDAL_INCLUDE_DIRS}")
+  target_link_libraries(vdb_tool_common INTERFACE ${PDAL_LIBRARIES})
+  target_include_directories(vdb_tool_common INTERFACE ${PDAL_INCLUDE_DIRS})
+endif()
+
 if(OPENVDB_TOOL_USE_JPG)
   target_compile_definitions(vdb_tool_common INTERFACE "VDB_TOOL_USE_JPG")
   find_package(JPEG REQUIRED)
@@ -90,16 +114,73 @@ if(OPENVDB_TOOL_USE_JPG)
   target_include_directories(vdb_tool_common INTERFACE ${JPEG_INCLUDE_DIR})
 endif()
 
+if(OPENVDB_TOOL_USE_MPEG)
+  target_compile_definitions(vdb_tool_common INTERFACE "VDB_TOOL_USE_MPEG")
+  find_program(FFMPEG_PATH NAMES ffmpeg REQUIRED)
+  target_compile_definitions(vdb_tool_common INTERFACE "VDB_TOOL_FFMPEG_PATH=\"${FFMPEG_PATH}\"")
+endif()
+
 if(OPENVDB_TOOL_USE_EXR)
   target_compile_definitions(vdb_tool_common INTERFACE "VDB_TOOL_USE_EXR")
-  find_package(OpenEXR REQUIRED)
-  target_link_libraries(vdb_tool_common INTERFACE OpenEXR::IlmImf)
+  find_package(OpenEXR ${MINIMUM_OPENEXR_VERSION} REQUIRED)
+  find_package(Imath ${MINIMUM_IMATH_VERSION} CONFIG REQUIRED)
+
+  if(TARGET OpenEXR::OpenEXR)
+    target_link_libraries(vdb_tool_common INTERFACE OpenEXR::OpenEXR Imath::Imath)
+  else()
+    target_link_libraries(vdb_tool_common INTERFACE OpenEXR::IlmImf Imath::Imath)
+  endif()
 endif()
 
 if(OPENVDB_TOOL_USE_ABC)
   target_compile_definitions(vdb_tool_common INTERFACE "VDB_TOOL_USE_ABC")
   find_package(Alembic CONFIG REQUIRED)
   target_link_libraries(vdb_tool_common INTERFACE Alembic::Alembic)
+endif()
+
+if(OPENVDB_TOOL_USE_USD)
+  target_compile_definitions(vdb_tool_common INTERFACE "VDB_TOOL_USE_USD")
+  # OpenUSD exports its CMake config under the "pxr" package name.
+  find_package(pxr CONFIG REQUIRED)
+  # Minimum set of OpenUSD libraries needed to traverse a stage and pull
+  # UsdGeomMesh data; pxr will transitively pull the rest.
+  target_link_libraries(vdb_tool_common INTERFACE usd usdGeom sdf gf vt tf)
+endif()
+
+if(OPENVDB_TOOL_USE_GLTF)
+  # tinygltf is a single-header BSD-3 reader for .gltf / .glb. Fetched at
+  # configure time so no system install is required. Used in header-only
+  # mode via TINYGLTF_HEADER_ONLY (set in Geometry.h), so every TU including
+  # the header gets inline definitions — no separate impl source file needed.
+  target_compile_definitions(vdb_tool_common INTERFACE "VDB_TOOL_USE_GLTF")
+  include(FetchContent)
+  FetchContent_Declare(tinygltf
+    GIT_REPOSITORY https://github.com/syoyo/tinygltf.git
+    GIT_TAG        v2.9.5
+    GIT_SHALLOW    TRUE
+  )
+  # tinygltf's CMakeLists builds examples by default — disable.
+  set(TINYGLTF_BUILD_LOADER_EXAMPLE    OFF CACHE BOOL "" FORCE)
+  set(TINYGLTF_BUILD_GL_EXAMPLES       OFF CACHE BOOL "" FORCE)
+  set(TINYGLTF_BUILD_VALIDATOR_EXAMPLE OFF CACHE BOOL "" FORCE)
+  set(TINYGLTF_BUILD_BUILDER_EXAMPLE   OFF CACHE BOOL "" FORCE)
+  set(TINYGLTF_HEADER_ONLY             ON  CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(tinygltf)
+  target_include_directories(vdb_tool_common INTERFACE ${tinygltf_SOURCE_DIR})
+endif()
+
+if(OPENVDB_TOOL_USE_AX)
+  target_compile_definitions(vdb_tool_common INTERFACE "VDB_TOOL_USE_AX")
+  # Resolve the AX library the same way the vdb_ax CLI does: use the in-tree
+  # target when AX is built alongside (OPENVDB_BUILD_AX), otherwise the
+  # installed OpenVDB::openvdb_ax component (which transitively pulls LLVM).
+  if(OPENVDB_BUILD_AX)
+    set(OPENVDBAX_LIB openvdb_ax)
+  else()
+    find_package(OpenVDB REQUIRED COMPONENTS openvdb_ax)
+    set(OPENVDBAX_LIB OpenVDB::openvdb_ax)
+  endif()
+  target_link_libraries(vdb_tool_common INTERFACE ${OPENVDBAX_LIB})
 endif()
 
 if(WIN32 AND (OPENVDB_TOOL_USE_ALL OR (OPENVDB_TOOL_USE_ABC AND OPENVDB_TOOL_USE_EXR)))
@@ -160,20 +241,24 @@ else()
     target_link_libraries(vdb_tool_common INTERFACE TBB::tbb OpenVDB::openvdb)
 endif()
 
-target_include_directories(vdb_tool_common INTERFACE "${Boost_INCLUDE_DIRS}" "${OpenVDB_INCLUDE_DIRS}" "include")
+target_include_directories(vdb_tool_common INTERFACE "${OpenVDB_INCLUDE_DIRS}" "include")
 
 # vdb_tool
 add_executable(vdb_tool src/main.cpp)
 target_include_directories(vdb_tool PRIVATE vdb_tool_common)
 target_link_libraries(vdb_tool PRIVATE vdb_tool_common)
-install(TARGETS vdb_tool RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(TARGETS vdb_tool RUNTIME DESTINATION ${OPENVDB_INSTALL_BINDIR})
 
 
 # unit test
-if(BUILD_TEST)
-  find_package(GTest CONFIG REQUIRED)
+if(OPENVDB_BUILD_VDB_TOOL_UNITTESTS)
+  find_package(GTest ${MINIMUM_GOOGLETEST_VERSION} CONFIG REQUIRED)
 
   add_executable(vdb_tool_test src/unittest.cpp)
   target_include_directories(vdb_tool_test PRIVATE vdb_tool_common)
-  target_link_libraries(vdb_tool_test PRIVATE vdb_tool_common GTest::gmock GTest::gtest GTest::gmock_main GTest::gtest_main)
+  # The test provides its own main() and uses only gtest (no gmock), so link just
+  # GTest::gtest. Listing gmock / *_main as well pulls gtest/gmock onto the link
+  # line multiple times, which the macOS linker flags as "ignoring duplicate libraries".
+  target_link_libraries(vdb_tool_test PRIVATE vdb_tool_common GTest::gtest)
+  add_test(vdb_tool_unit_test vdb_tool_test)
 endif()

@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 #ifndef OPENVDB_GRID_HAS_BEEN_INCLUDED
 #define OPENVDB_GRID_HAS_BEEN_INCLUDED
@@ -9,6 +9,7 @@
 #include "Types.h"
 #include "io/io.h"
 #include "math/Transform.h"
+#include "tree/LeafManager.h"
 #include "tree/Tree.h"
 #include "util/Assert.h"
 #include "util/logging.h"
@@ -442,10 +443,10 @@ public:
 
     /// @}
 
-
     /// @name I/O
     /// @{
 
+#if OPENVDB_ABI_VERSION_NUMBER < 14
     /// @brief Read the grid topology from a stream.
     /// This will read only the grid structure, not the actual data buffers.
     virtual void readTopology(std::istream&) = 0;
@@ -457,14 +458,13 @@ public:
     virtual void readBuffers(std::istream&) = 0;
     /// Read all of this grid's data buffers that intersect the given index-space bounding box.
     virtual void readBuffers(std::istream&, const CoordBBox&) = 0;
-    /// @brief Read all of this grid's data buffers that are not yet resident in memory
-    /// (because delayed loading is in effect).
-    /// @details If this grid was read from a memory-mapped file, this operation
-    /// disconnects the grid from the file.
-    /// @sa io::File::open, io::MappedFile
+
+    OPENVDB_DEPRECATED_MESSAGE("This method is deprecated and will be removed. Delayed loading is no longer supported.")
     virtual void readNonresidentBuffers() const = 0;
+
     /// Write out all data buffers for this grid.
     virtual void writeBuffers(std::ostream&) const = 0;
+#endif
 
     /// Read in the transform for this grid.
     void readTransform(std::istream& is) { transform().read(is); }
@@ -586,10 +586,10 @@ public:
     using ValueAllIter        = typename _TreeType::ValueAllIter;
     using ValueAllCIter       = typename _TreeType::ValueAllCIter;
 
-    using Accessor            = typename tree::ValueAccessor<_TreeType, true>;
-    using ConstAccessor       = typename tree::ValueAccessor<const _TreeType, true>;
-    using UnsafeAccessor      = typename tree::ValueAccessor<_TreeType, false>;
-    using ConstUnsafeAccessor = typename tree::ValueAccessor<const _TreeType, false>;
+    using Accessor            = typename _TreeType::Accessor;
+    using ConstAccessor       = typename _TreeType::ConstAccessor;
+    using UnsafeAccessor      = typename _TreeType::UnsafeAccessor;
+    using ConstUnsafeAccessor = typename _TreeType::ConstUnsafeAccessor;
 
     /// @brief ValueConverter<T>::Type is the type of a grid having the same
     /// hierarchy as this grid but a different value type, T.
@@ -729,7 +729,7 @@ public:
     /// @brief Return an accessor that provides random read and write access
     /// to this grid's voxels.
     /// @details The accessor is safe in the sense that it is registered with this grid's tree.
-    Accessor getAccessor() { return Accessor(tree()); }
+    Accessor getAccessor() { return mTree->getAccessor(); }
     /// @brief Return an unsafe accessor that provides random read and write access
     /// to this grid's voxels.
     /// @details The accessor is unsafe in the sense that it is not registered
@@ -737,11 +737,11 @@ public:
     /// over a registered accessor, but it is unsafe if the tree topology is modified.
     /// @warning Only use this method if you're an expert and know the
     /// risks of using an unregistered accessor (see tree/ValueAccessor.h)
-    UnsafeAccessor getUnsafeAccessor() { return UnsafeAccessor(tree()); }
+    UnsafeAccessor getUnsafeAccessor() { return mTree->getUnsafeAccessor(); }
     /// Return an accessor that provides random read-only access to this grid's voxels.
-    ConstAccessor getAccessor() const { return ConstAccessor(tree()); }
+    ConstAccessor getAccessor() const { return mTree->getConstAccessor(); }
     /// Return an accessor that provides random read-only access to this grid's voxels.
-    ConstAccessor getConstAccessor() const { return ConstAccessor(tree()); }
+    ConstAccessor getConstAccessor() const { return mTree->getConstAccessor(); }
     /// @brief Return an unsafe accessor that provides random read-only access
     /// to this grid's voxels.
     /// @details The accessor is unsafe in the sense that it is not registered
@@ -749,7 +749,7 @@ public:
     /// over a registered accessor, but it is unsafe if the tree topology is modified.
     /// @warning Only use this method if you're an expert and know the
     /// risks of using an unregistered accessor (see tree/ValueAccessor.h)
-    ConstUnsafeAccessor getConstUnsafeAccessor() const { return ConstUnsafeAccessor(tree()); }
+    ConstUnsafeAccessor getConstUnsafeAccessor() const { return mTree->getConstUnsafeAccessor(); }
 
     /// Return an iterator over all of this grid's active values (tile and voxel).
     ValueOnIter   beginValueOn()       { return tree().beginValueOn(); }
@@ -784,6 +784,7 @@ public:
     /// representation of the filled box.  Follow fill operations with a prune()
     /// operation for optimal sparseness.
     void sparseFill(const CoordBBox& bbox, const ValueType& value, bool active = true);
+
     /// @brief Set all voxels within a given axis-aligned box to a constant value.
     /// @param bbox    inclusive coordinates of opposite corners of an axis-aligned box
     /// @param value   the value to which to set voxels within the box
@@ -792,6 +793,7 @@ public:
     /// @note This operation generates a sparse, but not always optimally sparse,
     /// representation of the filled box.  Follow fill operations with a prune()
     /// operation for optimal sparseness.
+    /// @details Identical to sparseFill defined above.
     void fill(const CoordBBox& bbox, const ValueType& value, bool active = true);
 
     /// @brief Set all voxels within a given axis-aligned box to a constant value
@@ -873,10 +875,6 @@ public:
     CoordBBox evalActiveVoxelBoundingBox() const override;
     /// Return the dimensions of the axis-aligned bounding box of all active voxels.
     Coord evalActiveVoxelDim() const override;
-    /// Return the minimum and maximum active values in this grid.
-    OPENVDB_DEPRECATED_MESSAGE("Switch from grid->evalMinMax(minVal, maxVal) to \
-tools::minMax(grid->tree()). Use threaded = false for serial execution")
-    void evalMinMax(ValueType& minVal, ValueType& maxVal) const;
 
     /// Return the number of bytes of memory used by this grid.
     /// @todo Add transform().memUsage()
@@ -932,6 +930,7 @@ tools::minMax(grid->tree()). Use threaded = false for serial execution")
     /// @name I/O
     /// @{
 
+#if OPENVDB_ABI_VERSION_NUMBER < 14
     /// @brief Read the grid topology from a stream.
     /// This will read only the grid structure, not the actual data buffers.
     void readTopology(std::istream&) override;
@@ -943,14 +942,14 @@ tools::minMax(grid->tree()). Use threaded = false for serial execution")
     void readBuffers(std::istream&) override;
     /// Read all of this grid's data buffers that intersect the given index-space bounding box.
     void readBuffers(std::istream&, const CoordBBox&) override;
-    /// @brief Read all of this grid's data buffers that are not yet resident in memory
-    /// (because delayed loading is in effect).
-    /// @details If this grid was read from a memory-mapped file, this operation
-    /// disconnects the grid from the file.
-    /// @sa io::File::open, io::MappedFile
-    void readNonresidentBuffers() const override;
+
+    OPENVDB_DEPRECATED_MESSAGE("This method is deprecated and will be removed. Delayed loading is no longer supported.")
+    void readNonresidentBuffers() const override { }
+
     /// Write out all data buffers for this grid.
     void writeBuffers(std::ostream&) const override;
+
+#endif // OPENVDB_ABI_VERSION_NUMBER < 14
 
     /// Output a human-readable description of this grid.
     void print(std::ostream& = std::cout, int verboseLevel = 1) const override;
@@ -1063,7 +1062,7 @@ struct TreeAdapter
     using TreePtrType          = typename TreeType::Ptr;
     using ConstTreePtrType     = typename TreeType::ConstPtr;
     using NonConstTreePtrType  = typename NonConstTreeType::Ptr;
-    using GridType             = Grid<TreeType>;
+    using GridType             = Grid<NonConstTreeType>;
     using NonConstGridType     = Grid<NonConstTreeType>;
     using GridPtrType          = typename GridType::Ptr;
     using NonConstGridPtrType  = typename NonConstGridType::Ptr;
@@ -1073,14 +1072,14 @@ struct TreeAdapter
     using ConstAccessorType    = typename tree::ValueAccessor<const TreeType>;
     using NonConstAccessorType = typename tree::ValueAccessor<NonConstTreeType>;
 
-    static TreeType& tree(TreeType& t) { return t; }
-    static TreeType& tree(GridType& g) { return g.tree(); }
-    static const TreeType& tree(const TreeType& t) { return t; }
-    static const TreeType& tree(const GridType& g) { return g.tree(); }
-    static const TreeType& constTree(TreeType& t) { return t; }
-    static const TreeType& constTree(GridType& g) { return g.constTree(); }
-    static const TreeType& constTree(const TreeType& t) { return t; }
-    static const TreeType& constTree(const GridType& g) { return g.constTree(); }
+    static NonConstTreeType& tree(NonConstTreeType& t) { return t; }
+    static NonConstTreeType& tree(NonConstGridType& g) { return g.tree(); }
+    static const NonConstTreeType& tree(const NonConstTreeType& t) { return t; }
+    static const NonConstTreeType& tree(const NonConstGridType& g) { return g.tree(); }
+    static const NonConstTreeType& constTree(NonConstTreeType& t) { return t; }
+    static const NonConstTreeType& constTree(NonConstGridType& g) { return g.constTree(); }
+    static const NonConstTreeType& constTree(const NonConstTreeType& t) { return t; }
+    static const NonConstTreeType& constTree(const NonConstGridType& g) { return g.constTree(); }
 };
 
 
@@ -1103,19 +1102,19 @@ struct TreeAdapter<Grid<_TreeType> >
     using ConstAccessorType    = typename tree::ValueAccessor<const TreeType>;
     using NonConstAccessorType = typename tree::ValueAccessor<NonConstTreeType>;
 
-    static TreeType& tree(TreeType& t) { return t; }
-    static TreeType& tree(GridType& g) { return g.tree(); }
-    static const TreeType& tree(const TreeType& t) { return t; }
-    static const TreeType& tree(const GridType& g) { return g.tree(); }
-    static const TreeType& constTree(TreeType& t) { return t; }
-    static const TreeType& constTree(GridType& g) { return g.constTree(); }
-    static const TreeType& constTree(const TreeType& t) { return t; }
-    static const TreeType& constTree(const GridType& g) { return g.constTree(); }
+    static NonConstTreeType& tree(NonConstTreeType& t) { return t; }
+    static NonConstTreeType& tree(NonConstGridType& g) { return g.tree(); }
+    static const NonConstTreeType& tree(const NonConstTreeType& t) { return t; }
+    static const NonConstTreeType& tree(const NonConstGridType& g) { return g.tree(); }
+    static const NonConstTreeType& constTree(NonConstTreeType& t) { return t; }
+    static const NonConstTreeType& constTree(NonConstGridType& g) { return g.constTree(); }
+    static const NonConstTreeType& constTree(const NonConstTreeType& t) { return t; }
+    static const NonConstTreeType& constTree(const NonConstGridType& g) { return g.constTree(); }
 };
 
-/// Partial specialization for ValueAccessor types
+/// Partial specialization for const Grid types
 template<typename _TreeType>
-struct TreeAdapter<tree::ValueAccessor<_TreeType> >
+struct TreeAdapter<const Grid<_TreeType> >
 {
     using TreeType             = _TreeType;
     using NonConstTreeType     = typename std::remove_const<TreeType>::type;
@@ -1132,16 +1131,51 @@ struct TreeAdapter<tree::ValueAccessor<_TreeType> >
     using ConstAccessorType    = typename tree::ValueAccessor<const TreeType>;
     using NonConstAccessorType = typename tree::ValueAccessor<NonConstTreeType>;
 
-    static TreeType& tree(TreeType& t) { return t; }
-    static TreeType& tree(GridType& g) { return g.tree(); }
-    static TreeType& tree(AccessorType& a) { return a.tree(); }
-    static const TreeType& tree(const TreeType& t) { return t; }
-    static const TreeType& tree(const GridType& g) { return g.tree(); }
-    static const TreeType& tree(const AccessorType& a) { return a.tree(); }
-    static const TreeType& constTree(TreeType& t) { return t; }
-    static const TreeType& constTree(GridType& g) { return g.constTree(); }
-    static const TreeType& constTree(const TreeType& t) { return t; }
-    static const TreeType& constTree(const GridType& g) { return g.constTree(); }
+    static NonConstTreeType& tree(NonConstTreeType& t) { return t; }
+    static NonConstTreeType& tree(NonConstGridType& g) { return g.tree(); }
+    static const NonConstTreeType& tree(const NonConstTreeType& t) { return t; }
+    static const NonConstTreeType& tree(const NonConstGridType& g) { return g.tree(); }
+    static const NonConstTreeType& constTree(NonConstTreeType& t) { return t; }
+    static const NonConstTreeType& constTree(NonConstGridType& g) { return g.constTree(); }
+    static const NonConstTreeType& constTree(const NonConstTreeType& t) { return t; }
+    static const NonConstTreeType& constTree(const NonConstGridType& g) { return g.constTree(); }
+};
+
+/// Partial specialization for ValueAccessor types
+template<typename _TreeType>
+struct TreeAdapter<tree::ValueAccessor<_TreeType> >
+{
+    using TreeType             = _TreeType;
+    using NonConstTreeType     = typename std::remove_const<TreeType>::type;
+    using TreePtrType          = typename TreeType::Ptr;
+    using ConstTreePtrType     = typename TreeType::ConstPtr;
+    using NonConstTreePtrType  = typename NonConstTreeType::Ptr;
+    using GridType             = Grid<NonConstTreeType>;
+    using NonConstGridType     = Grid<NonConstTreeType>;
+    using GridPtrType          = typename GridType::Ptr;
+    using NonConstGridPtrType  = typename NonConstGridType::Ptr;
+    using ConstGridPtrType     = typename GridType::ConstPtr;
+    using ValueType            = typename TreeType::ValueType;
+    using AccessorType         = typename tree::ValueAccessor<TreeType>;
+    using ConstAccessorType    = typename tree::ValueAccessor<const NonConstTreeType>;
+    using NonConstAccessorType = typename tree::ValueAccessor<NonConstTreeType>;
+
+    static NonConstTreeType& tree(NonConstTreeType& t) { return t; }
+    static NonConstTreeType& tree(NonConstGridType& g) { return g.tree(); }
+    static NonConstTreeType& tree(NonConstAccessorType& a) { return a.tree(); }
+    static const NonConstTreeType& tree(ConstAccessorType& a) { return a.tree(); }
+    static const NonConstTreeType& tree(const NonConstTreeType& t) { return t; }
+    static const NonConstTreeType& tree(const NonConstGridType& g) { return g.tree(); }
+    static const NonConstTreeType& tree(const NonConstAccessorType& a) { return a.tree(); }
+    static const NonConstTreeType& tree(const ConstAccessorType& a) { return a.tree(); }
+    static const NonConstTreeType& constTree(NonConstTreeType& t) { return t; }
+    static const NonConstTreeType& constTree(NonConstGridType& g) { return g.constTree(); }
+    static const NonConstTreeType& constTree(NonConstAccessorType& a) { return a.tree(); }
+    static const NonConstTreeType& constTree(ConstAccessorType& a) { return a.tree(); }
+    static const NonConstTreeType& constTree(const NonConstTreeType& t) { return t; }
+    static const NonConstTreeType& constTree(const NonConstGridType& g) { return g.constTree(); }
+    static const NonConstTreeType& constTree(const NonConstAccessorType& a) { return a.tree(); }
+    static const NonConstTreeType& constTree(const ConstAccessorType& a) { return a.tree(); }
 };
 
 //@}
@@ -1150,14 +1184,34 @@ struct TreeAdapter<tree::ValueAccessor<_TreeType> >
 ////////////////////////////////////////
 
 
+namespace points {
+
+template<typename T, Index Log2Dim> class PointDataLeafNode;
+
+/// @brief Type trait that evaluates to true only for @c PointDataLeafNode instantiations.
+template<typename T>
+struct IsPointDataLeafNode : std::false_type {};
+
+template<typename T, Index Log2Dim>
+struct IsPointDataLeafNode<PointDataLeafNode<T, Log2Dim>> : std::true_type {};
+
+} // namespace points
+
+
 /// @brief Metafunction that specifies whether a given leaf node, tree, or grid type
-/// requires multiple passes to read and write voxel data
-/// @details Multi-pass I/O allows one to optimize the data layout of leaf nodes
-/// for certain access patterns during delayed loading.
-/// @sa io::MultiPass
+/// requires multiple passes to read and write voxel data.
+/// @details Multi-pass I/O allows leaf nodes to optimize their serialization layout
+/// for delayed-load access patterns. Only @c PointDataLeafNode supports multi-pass I/O.
+/// Defining a custom leaf node that inherits @c io::PointDataGridMultiPass is no longer permitted.
+/// @sa points::IsPointDataLeafNode
 template<typename LeafNodeType>
 struct HasMultiPassIO {
-    static const bool value = std::is_base_of<io::MultiPass, LeafNodeType>::value;
+    static_assert(
+        !std::is_base_of<io::PointDataGridMultiPass, LeafNodeType>::value
+        || points::IsPointDataLeafNode<LeafNodeType>::value,
+        "Only PointDataLeafNode may inherit from io::PointDataGridMultiPass; "
+        "use points::IsPointDataLeafNode to test for multi-pass I/O support.");
+    static const bool value = points::IsPointDataLeafNode<LeafNodeType>::value;
 };
 
 // Partial specialization for Tree types
@@ -1549,16 +1603,6 @@ Grid<TreeT>::topologyDifference(const Grid<OtherTreeType>& other)
 
 
 template<typename TreeT>
-inline void
-Grid<TreeT>::evalMinMax(ValueType& minVal, ValueType& maxVal) const
-{
-    OPENVDB_NO_DEPRECATION_WARNING_BEGIN
-    tree().evalMinMax(minVal, maxVal);
-    OPENVDB_NO_DEPRECATION_WARNING_END
-}
-
-
-template<typename TreeT>
 inline CoordBBox
 Grid<TreeT>::evalActiveVoxelBoundingBox() const
 {
@@ -1580,6 +1624,7 @@ Grid<TreeT>::evalActiveVoxelDim() const
 
 ////////////////////////////////////////
 
+#if OPENVDB_ABI_VERSION_NUMBER < 14
 
 /// @internal Consider using the stream tagging mechanism (see io::Archive)
 /// to specify the float precision, but note that the setting is per-grid.
@@ -1589,6 +1634,28 @@ inline void
 Grid<TreeT>::readTopology(std::istream& is)
 {
     tree().readTopology(is, saveFloatAsHalf());
+    // When called from the legacy (non-codec) TopologyOnly path, the stream
+    // metadata carries a flag requesting that leaf buffers be allocated and
+    // filled with the background value (PartialCreate leaves them
+    // unallocated after readTopology).
+    if (io::StreamMetadata::Ptr meta = io::getStreamMetadataPtr(is)) {
+        if (meta->allocateLeafBuffers()) {
+            meta->setAllocateLeafBuffers(false);
+            if constexpr (!std::is_void_v<typename TreeT::LeafNodeType>) {
+                const auto background = tree().root().background();
+                tree::LeafManager<TreeT> leafManager(tree());
+                leafManager.foreach([&background](auto& leaf, size_t) {
+                    using LeafType = std::decay_t<decltype(leaf)>;
+                    if constexpr (!std::is_same_v<typename LeafType::ValueType, bool>) {
+                        if (leaf.buffer().empty()) {
+                            leaf.buffer().allocate();
+                            leaf.buffer().fill(background);
+                        }
+                    }
+                });
+            }
+        }
+    }
 }
 
 
@@ -1604,7 +1671,9 @@ template<typename TreeT>
 inline void
 Grid<TreeT>::readBuffers(std::istream& is)
 {
-    if (!hasMultiPassIO() || (io::getFormatVersion(is) < OPENVDB_FILE_VERSION_MULTIPASS_IO)) {
+    io::checkFormatVersion(is);
+
+    if (!hasMultiPassIO()) {
         tree().readBuffers(is, saveFloatAsHalf());
     } else {
         uint16_t numPasses = 1;
@@ -1626,7 +1695,9 @@ template<typename TreeT>
 inline void
 Grid<TreeT>::readBuffers(std::istream& is, const CoordBBox& bbox)
 {
-    if (!hasMultiPassIO() || (io::getFormatVersion(is) < OPENVDB_FILE_VERSION_MULTIPASS_IO)) {
+    io::checkFormatVersion(is);
+
+    if (!hasMultiPassIO()) {
         tree().readBuffers(is, bbox, saveFloatAsHalf());
     } else {
         uint16_t numPasses = 1;
@@ -1642,14 +1713,6 @@ Grid<TreeT>::readBuffers(std::istream& is, const CoordBBox& bbox)
         // so instead clip afterwards.
         tree().clip(bbox);
     }
-}
-
-
-template<typename TreeT>
-inline void
-Grid<TreeT>::readNonresidentBuffers() const
-{
-    tree().readNonresidentBuffers();
 }
 
 
@@ -1679,6 +1742,8 @@ Grid<TreeT>::writeBuffers(std::ostream& os) const
         }
     }
 }
+
+#endif // OPENVDB_ABI_VERSION_NUMBER < 14
 
 
 //static
@@ -1749,7 +1814,7 @@ createLevelSet(Real voxelSize, Real halfWidth)
     using ValueType = typename GridType::ValueType;
 
     // GridType::ValueType is required to be a floating-point scalar.
-    static_assert(std::is_floating_point<ValueType>::value,
+    static_assert(openvdb::is_floating_point<ValueType>::value,
         "level-set grids must be floating-point-valued");
 
     typename GridType::Ptr grid = GridType::create(

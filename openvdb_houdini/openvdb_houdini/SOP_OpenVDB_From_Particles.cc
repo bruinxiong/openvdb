@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 //
 /// @file SOP_OpenVDB_From_Particles.cc
 ///
@@ -55,7 +55,7 @@ public:
         return new SOP_OpenVDB_From_Particles(net, name, op);
     }
 
-    int isRefInput(unsigned i) const override { return (i > 0); }
+    int isRefInput(OP_InputIdx i) const override { return (i > 0); }
 
     int convertUnits();
 

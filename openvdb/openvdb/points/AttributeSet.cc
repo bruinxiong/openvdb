@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /// @file points/AttributeSet.cc
 
@@ -138,19 +138,6 @@ AttributeSet::memUsage() const
     }
     return bytes;
 }
-
-
-#if OPENVDB_ABI_VERSION_NUMBER >= 10
-size_t
-AttributeSet::memUsageIfLoaded() const
-{
-    size_t bytes = sizeof(*this) + mDescr->memUsage();
-    for (const auto& attr : mAttrs) {
-        bytes += attr->memUsageIfLoaded();
-    }
-    return bytes;
-}
-#endif
 
 
 size_t

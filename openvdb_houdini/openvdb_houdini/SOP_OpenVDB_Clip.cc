@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /// @file SOP_OpenVDB_Clip.cc
 ///
@@ -17,6 +17,7 @@
 #include <openvdb/tools/Morphology.h> // for tools::dilateActiveValues(), tools::erodeActiveValues()
 #include <openvdb/points/PointDataGrid.h>
 #include <OBJ/OBJ_Camera.h>
+#include <UT/UT_Version.h>
 #include <cmath> // for std::abs(), std::round()
 #include <exception>
 #include <string>
@@ -35,7 +36,11 @@ public:
 
     static OP_Node* factory(OP_Network*, const char* name, OP_Operator*);
 
-    int isRefInput(unsigned input) const override { return (input == 1); }
+    int isRefInput(OP_InputIdx input) const override
+    {
+        UT_ASSERT(input >= 0);
+        return (input == 1);
+    }
 
     class Cache: public SOP_VDBCacheOptions
     {
@@ -109,7 +114,11 @@ Mask VDB:\n\
 
     parms.add(hutil::ParmFactory(PRM_STRING, "camera", "Camera")
         .setTypeExtended(PRM_TYPE_DYNAMIC_PATH)
+#if SYS_VERSION_MAJOR_INT >= 21
+        .setSpareData(&PRM_SpareData::anyCameraPath)
+#else
         .setSpareData(&PRM_SpareData::objCameraPath)
+#endif
         .setTooltip("Specify the path to a reference camera")
         .setDocumentation(
             "The path to the camera whose frustum is to be used as a clipping region"
@@ -435,6 +444,28 @@ SOP_OpenVDB_Clip::Cache::getFrustum(OP_Context& context)
         throw std::runtime_error{"no camera path was specified"};
     }
 
+#if SYS_VERSION_MAJOR_INT >= 21
+    UT_CameraParms   cameraParms;
+    UT_Matrix4D      cameratosop;
+    OBJ_Node        *meobj = cookparms()->getNode()
+                        ? cookparms()->getNode()->getCreator()->castToOBJNode()
+                        : nullptr;
+    UT_StringHolder  errstr;
+
+    OP_Node::getCameraInfoAndRelativeTransform(
+        cameraPath,
+        meobj ? meobj->getFullPath() : UT_StringHolder::theEmptyString,
+        cookparms()->getCwd(),
+        false, // get_inverse_xform
+        context,
+        cookparms()->depnode(),
+        cameraParms,
+        cameratosop,
+        errstr);
+    if (errstr.isstring())
+        throw std::runtime_error{"camera \"" + cameraPath.toStdString() + "\" was not found"};
+#else
+    OBJ_CameraParms cameraParms;
     OBJ_Camera* camera = nullptr;
     if (auto* obj = cookparms()->getCwd()->findOBJNode(cameraPath)) {
         camera = obj->castToOBJCamera();
@@ -446,8 +477,9 @@ SOP_OpenVDB_Clip::Cache::getFrustum(OP_Context& context)
     }
     self->addExtraInput(camera, OP_INTEREST_DATA);
 
-    OBJ_CameraParms cameraParms;
     camera->getCameraParms(cameraParms, time);
+#endif
+
     if (cameraParms.projection != OBJ_PROJ_PERSPECTIVE) {
         throw std::runtime_error{cameraPath.toStdString() + " is not a perspective camera"};
         /// @todo support ortho and other cameras?
@@ -458,13 +490,26 @@ SOP_OpenVDB_Clip::Cache::getFrustum(OP_Context& context)
 
     const float nearPlane = (evalInt("setnear", 0, time)
         ? static_cast<float>(evalFloat("near", 0, time))
-        : static_cast<float>(camera->getNEAR(time))) - padding[2];
+#if SYS_VERSION_MAJOR_INT >= 22
+        : static_cast<float>(cameraParms.clipnear)) - padding[2];
+#else
+        : static_cast<float>(cameraParms.mynear)) - padding[2];
+#endif
     const float farPlane = (evalInt("setfar", 0, time)
         ? static_cast<float>(evalFloat("far", 0, time))
-        : static_cast<float>(camera->getFAR(time))) + padding[2];
+#if SYS_VERSION_MAJOR_INT >= 22
+        : static_cast<float>(cameraParms.clipfar)) + padding[2];
+#else
+        : static_cast<float>(cameraParms.myfar)) + padding[2];
+#endif
 
+#if SYS_VERSION_MAJOR_INT >= 21
+    mFrustum = hvdb::frustumTransformFromCamera(cameraParms, cameratosop,
+        /*offset=*/0.f, nearPlane, farPlane, /*voxelDepth=*/1.f, /*voxelCountX=*/100);
+#else
     mFrustum = hvdb::frustumTransformFromCamera(*self, context, *camera,
         /*offset=*/0.f, nearPlane, farPlane, /*voxelDepth=*/1.f, /*voxelCountX=*/100);
+#endif
 
     if (!mFrustum || !mFrustum->constMap<openvdb::math::NonlinearFrustumMap>()) {
         throw std::runtime_error{

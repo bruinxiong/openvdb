@@ -1,11 +1,16 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /// @file util/x86.cc
 
 #include "x86.h"
 
+#include <llvm/Config/llvm-config.h>
+#if LLVM_VERSION_MAJOR < 18
 #include <llvm/Support/Host.h>
+#else
+#include <llvm/TargetParser/Host.h>
+#endif
 #include <llvm/ADT/StringMap.h>
 
 namespace openvdb {
@@ -16,10 +21,14 @@ namespace x86 {
 
 CpuFlagStatus CheckX86Feature(const std::string& flag)
 {
+#if LLVM_VERSION_MAJOR <= 18
     llvm::StringMap<bool> HostFeatures;
     if (!llvm::sys::getHostCPUFeatures(HostFeatures)) {
         return CpuFlagStatus::Unknown;
     }
+#else
+    llvm::StringMap<bool> HostFeatures = llvm::sys::getHostCPUFeatures();
+#endif
     if (!HostFeatures.empty()) {
         for (auto& feature : HostFeatures) {
             if (feature.first() == flag) {

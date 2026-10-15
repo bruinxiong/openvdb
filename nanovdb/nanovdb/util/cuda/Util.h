@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /*!
     \file nanovdb/util/cuda/Util.h
@@ -16,6 +16,7 @@
 
 #include <cuda.h>
 #include <cuda_runtime_api.h>
+#include <vector>
 #include <nanovdb/util/Util.h> // for stderr and NANOVDB_ASSERT
 
 // change 1 -> 0 to only perform asserts during debug builds
@@ -70,44 +71,141 @@ namespace nanovdb {// =========================================================
 namespace util::cuda {// ======================================================
 
 //#define NANOVDB_USE_SYNC_CUDA_MALLOC
-// cudaMallocAsync and cudaFreeAsync were introduced in CUDA 11.2 so we introduce
-// custom implementations that map to cudaMalloc and cudaFree below. If NANOVDB_USE_SYNC_CUDA_MALLOC
-// is defined these implementations will also be defined, which is useful in virtualized environments
-// that slice up the GPU and share it between instances as vGPU's. GPU unified memory is usually disabled
-// out of security considerations. Asynchronous CUDA malloc/free depends on GPU unified memory, so it
-// is not possible to use cudaMallocAsync and cudaFreeAsync in such environments.
+// cudaMallocAsync and cudaFreeAsync were introduced in CUDA 11.2, and even on newer
+// toolkits a device may not expose stream-ordered memory pools at runtime — fractional
+// vGPU configurations commonly disable them, making cudaMallocAsync fail with
+// cudaErrorNotSupported. The wrappers below therefore behave in two modes: when
+// CUDA < 11.2 or NANOVDB_USE_SYNC_CUDA_MALLOC is defined they map to synchronous
+// cudaMalloc/cudaFree; otherwise they use cudaMallocAsync/cudaFreeAsync and, on a
+// device that lacks memory pools, fail with an actionable diagnostic rather than
+// silently substituting synchronous allocation (which would make an async resource
+// misrepresent its own semantics — the choice of a synchronous backend belongs to the
+// caller, not to a hidden runtime fallback). Callers select synchronous allocation by
+// defining NANOVDB_USE_SYNC_CUDA_MALLOC, which -- because the wrappers are inline
+// functions -- must be defined identically in every translation unit to avoid violating
+// the one-definition rule.
+
+/// @brief Returns true if @c device supports stream-ordered memory pools, i.e.
+///        cudaMallocAsync/cudaFreeAsync. Queried once per process for all
+///        devices and cached; out-of-range device ids return false.
+inline bool memoryPoolsSupported(int device)
+{
+#if (CUDART_VERSION < 11020)
+    (void)device;
+    return false;
+#else
+    static const auto supported = [] {
+        int count = 0;
+        if (cudaGetDeviceCount(&count) != cudaSuccess || count < 0) count = 0;
+        std::vector<char> s(static_cast<size_t>(count), 0);
+        for (int i = 0; i < count; ++i) {
+            int attr = 0;
+            if (cudaDeviceGetAttribute(&attr, cudaDevAttrMemoryPoolsSupported, i) == cudaSuccess)
+                s[static_cast<size_t>(i)] = char(attr != 0);
+        }
+        return s;
+    }();
+    return device >= 0 && static_cast<size_t>(device) < supported.size() && supported[static_cast<size_t>(device)] != 0;
+#endif
+}
 
 #if (CUDART_VERSION < 11020) || defined(NANOVDB_USE_SYNC_CUDA_MALLOC) // 11.2 introduced cudaMallocAsync and cudaFreeAsync
 
-/// @brief Simple wrapper that calls cudaMalloc
+/// @brief Wrapper forced to synchronous cudaMalloc; see the mode comment above.
+///        The trailing stream argument is accepted for signature compatibility
+///        and ignored.
 /// @param d_ptr Device pointer to allocated device memory
 /// @param size  Number of bytes to allocate
-/// @param dummy The stream establishing the stream ordering contract and the memory pool to allocate from (ignored)
 /// @return Cuda error code
 inline cudaError_t mallocAsync(void** d_ptr, size_t size, cudaStream_t){return cudaMalloc(d_ptr, size);}
 
-/// @brief Simple wrapper that calls cudaFree
+/// @brief Wrapper forced to synchronous cudaFree; see the mode comment above.
+///        The trailing stream argument is accepted for signature compatibility
+///        and ignored.
 /// @param d_ptr Device pointer that will be freed
-/// @param dummy The stream establishing the stream ordering promise (ignored)
 /// @return Cuda error code
 inline cudaError_t freeAsync(void* d_ptr, cudaStream_t){return cudaFree(d_ptr);}
 
 #else
 
-/// @brief Simple wrapper that calls cudaMallocAsync
+/// @brief Wrapper that calls cudaMallocAsync. On a device without stream-ordered
+///        memory pools it emits an actionable diagnostic and returns
+///        cudaErrorNotSupported rather than silently allocating synchronously.
 /// @param d_ptr Device pointer to allocated device memory
 /// @param size  Number of bytes to allocate
 /// @param stream The stream establishing the stream ordering contract and the memory pool to allocate from
 /// @return Cuda error code
-inline cudaError_t mallocAsync(void** d_ptr, size_t size, cudaStream_t stream){return cudaMallocAsync(d_ptr, size, stream);}
+inline cudaError_t mallocAsync(void** d_ptr, size_t size, cudaStream_t stream)
+{
+    int device = 0;
+    const cudaError_t err = cudaGetDevice(&device);
+    if (err != cudaSuccess) return err;
+    if (!memoryPoolsSupported(device)) {
+        fprintf(stderr,
+                "NanoVDB: device %d does not support stream-ordered CUDA memory pools required by "
+                "cudaMallocAsync. Define NANOVDB_USE_SYNC_CUDA_MALLOC when building to allocate "
+                "synchronously with cudaMalloc/cudaFree instead.\n",
+                device);
+        return cudaErrorNotSupported;
+    }
+    return cudaMallocAsync(d_ptr, size, stream);
+}
 
-/// @brief Simple wrapper that calls cudaFreeAsync
+/// @brief Wrapper that calls cudaFreeAsync. Mirrors mallocAsync's pool check so a
+///        device without memory pools reports cudaErrorNotSupported rather than
+///        calling cudaFreeAsync where it cannot succeed.
 /// @param d_ptr Device pointer that will be freed
 /// @param stream The stream establishing the stream ordering promise
 /// @return Cuda error code
-inline cudaError_t freeAsync(void* d_ptr, cudaStream_t stream){return cudaFreeAsync(d_ptr, stream);}
+inline cudaError_t freeAsync(void* d_ptr, cudaStream_t stream)
+{
+    int device = 0;
+    const cudaError_t err = cudaGetDevice(&device);
+    if (err != cudaSuccess) return err;
+    if (!memoryPoolsSupported(device)) return cudaErrorNotSupported;
+    return cudaFreeAsync(d_ptr, stream);
+}
 
 #endif
+
+/// @brief Returns the device ID associated with the specified pointer
+/// @note  If @c ptr points to host memory (only) the return ID is either cudaInvalidDeviceId = -2 or cudaCpuDeviceId = -1
+inline int ptrToDevice(void *ptr)
+{
+    cudaPointerAttributes ptrAtt;
+    cudaCheck(cudaPointerGetAttributes(&ptrAtt, ptr));
+    return ptrAtt.device;
+}
+
+/// @brief Returns the ID of the current device
+inline int currentDevice()
+{
+    int current = cudaInvalidDeviceId;
+    cudaCheck(cudaGetDevice(&current));
+    assert(current != cudaInvalidDeviceId);
+    return current;
+}
+
+/// @brief Returns the number of devices with compute capability greater or equal to 1.0 that are available for execution
+inline int deviceCount()
+{
+    int deviceCount = 0;
+    cudaCheck(cudaGetDeviceCount(&deviceCount));
+    return deviceCount;
+}
+
+/// @brief Print information about a specific device
+/// @param device device ID for which information will be printed
+/// @param preMsg optional message printed before the device information
+/// @param file   Optional file stream to print to, e.g. stderr or stdout
+inline void printDevInfo(int device, const char *preMsg = nullptr, std::FILE* file = stderr)
+{
+    cudaDeviceProp prop;
+    cudaGetDeviceProperties(&prop, device);
+    if (preMsg) fprintf(file, "%s ", preMsg);
+    fprintf(file,"GPU #%d, named \"%s\", compute capability %d.%d, %zu GB of VRAM\n",
+            device, prop.name, prop.major, prop.minor, prop.totalGlobalMem >> 30);
+}
 
 /// @brief Simple (naive) implementation of a unique device pointer
 ///        using stream ordered memory allocation and deallocation.
@@ -160,6 +258,43 @@ inline size_t blocksPerGrid(size_t numItems, size_t threadsPerBlock)
     return (numItems + threadsPerBlock - 1) / threadsPerBlock;
 }
 
+// CUDA 13.0 changes cudaMemPrefetchAsync and cudaMemPrefetch to use a cudaMemLocation as an argument as
+// opposed to an integer device id. This function provides compatibility by returning the corresponding
+// location in CUDA 13.0 and above while passing through the device in earlier versions.
+#if (CUDART_VERSION < 13000)
+/// @brief Compatbility wrapper for cudaMemAdvise/cudaMemAdvise
+inline cudaError_t memAdvise(const void* devPtr, size_t count, cudaMemoryAdvise advice, int device) {
+    return cudaMemAdvise(devPtr, count, advice, device);
+}
+
+/// @brief Compatbility wrapper for cudaMemPrefetchAsync/cudaMemPrefetchAsync
+inline cudaError_t memPrefetchAsync(const void* devPtr, size_t count, int dstDevice, cudaStream_t stream) {
+    return cudaMemPrefetchAsync(devPtr, count, dstDevice, stream);
+}
+#else
+/// @brief Helper function that converts a device id to a cudaMemLocation
+/// @param device Integer device id
+/// @return cudaMemLocation corresponding to the device id
+inline cudaMemLocation deviceToLocation(int device) {
+    if (device < cudaCpuDeviceId) {
+        return {cudaMemLocationTypeInvalid, device};
+    } else if (device == cudaCpuDeviceId) {
+        return {cudaMemLocationTypeHost, device};
+    } else {
+        return {cudaMemLocationTypeDevice, device};
+    }
+}
+
+/// @brief Compatbility wrapper for cudaMemAdvise/cudaMemAdvise
+inline cudaError_t memAdvise(const void* devPtr, size_t count, cudaMemoryAdvise advice, int device) {
+    return cudaMemAdvise(devPtr, count, advice, deviceToLocation(device));
+}
+
+/// @brief Compatbility wrapper for cudaMemPrefetchAsync/cudaMemPrefetchAsync
+inline cudaError_t memPrefetchAsync(const void* devPtr, size_t count, int dstDevice, cudaStream_t stream) {
+    return cudaMemPrefetchAsync(devPtr, count, deviceToLocation(dstDevice), 0u, stream);
+}
+#endif
 
 #if defined(__CUDACC__)// the following functions only run on the GPU!
 
@@ -172,6 +307,79 @@ __global__ void lambdaKernel(const size_t numItems, Func func, Args... args)
     if (tid >= numItems) return;
     func(tid, args...);
 }// util::cuda::lambdaKernel
+
+/// @brief Cuda kernel that launches device lambda functions with a tid offset
+/// @param numItems Problem size
+/// @param offset Offset for thread id
+template<typename Func, typename... Args>
+__global__ void offsetLambdaKernel(size_t numItems, unsigned int offset, Func func, Args... args)
+{
+    const unsigned int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= numItems) return;
+    func(tid + offset, args...);
+}// util::cuda::offsetLambdaKernel
+
+/// @brief Cuda kernel that launches device operator functors with arbitrary arguments
+template<class Operator, typename... Args>
+__global__
+__launch_bounds__(Operator::MaxThreadsPerBlock, Operator::MinBlocksPerMultiprocessor)
+void operatorKernel(
+    Args... args)
+{
+    Operator op;
+    op( args... );
+}
+
+/// @brief Cuda kernel that launches a pre-constructed device operator functor with arbitrary arguments.
+///        Unlike operatorKernel, the operator is passed by value (copied at launch) rather than
+///        default-constructed on the device, allowing functors with data members.
+template<class Operator, typename... Args>
+__global__
+__launch_bounds__(Operator::MaxThreadsPerBlock, Operator::MinBlocksPerMultiprocessor)
+void operatorKernelInstance(Operator op, Args... args)
+{
+    op( args... );
+}
+
+/// @brief Cuda kernel that launches device operator functors with arbitrary arguments, using dynamic shared memory
+template<class Operator, typename... Args>
+__global__
+__launch_bounds__(Operator::MaxThreadsPerBlock, Operator::MinBlocksPerMultiprocessor)
+void operatorKernelDynamic(Args... args)
+{
+    extern __shared__ char smem_buf[];
+    Operator op;
+    op( args..., smem_buf );
+}
+
+/// @brief Wrapper for launching a device operator that leverages dynamic shared memory, with a specified size
+/// @code
+/// struct MyFunctor
+/// {
+///     // These are passed to __launch_bounds__
+///     static constexpr int MaxThreadsPerBlock = <nThreads>
+///     static constexpr int MinBlocksPerMultiprocessor = 1;
+///
+///     struct SharedStorage {
+///         // Include whatever is needed in smem
+///     };
+///
+///     __device__
+///     void operator()(Args ... myArgs, char smem_buf[])
+///     { ... }
+/// };
+///
+/// dynamicSharedMemoryLauncher<MyFunctor>(nBlocks, sizeof(typename MyFunctor::SharedStorage), myArgs...);
+/// // smem_buff of size sizeof(MyFunctor::SharedStorage) will be automatically passed along
+/// @endcode
+template<class Operator, typename... Args>
+void dynamicSharedMemoryLauncher(const size_t numItems, const size_t smem_size, cudaStream_t stream, Args... args)
+{
+    cudaCheck(cudaFuncSetAttribute(operatorKernelDynamic<Operator, Args...>,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,smem_size));
+    operatorKernelDynamic<Operator>
+        <<<numItems, Operator::MaxThreadsPerBlock, smem_size, stream>>>( args ... );
+}
 
 #endif// __CUDACC__
 

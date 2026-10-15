@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /// @file compiler/Logger.h
 ///
@@ -20,7 +20,7 @@
 #include <string>
 #include <unordered_map>
 
-class TestLogger;
+struct TestLoggerAcc;
 
 namespace openvdb {
 OPENVDB_USE_VERSION_NAMESPACE
@@ -196,8 +196,7 @@ public:
     struct SourceCode;
 
 private:
-
-    friend class ::TestLogger;
+    friend struct ::TestLoggerAcc;
 
     OutputFunction mErrorOutput;
     OutputFunction mWarningOutput;

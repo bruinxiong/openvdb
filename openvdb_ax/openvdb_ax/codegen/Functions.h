@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /// @file codegen/Functions.h
 ///
@@ -61,7 +61,7 @@ OPENVDB_AX_API void insertVDBVolumeFunctions(FunctionRegistry& reg, const Functi
 
 inline FunctionRegistry::UniquePtr createDefaultRegistry(const FunctionOptions* op)
 {
-    FunctionRegistry::UniquePtr registry(new FunctionRegistry);
+    FunctionRegistry::UniquePtr registry(new FunctionRegistry());
     insertStandardFunctions(*registry, op);
     insertVDBPointFunctions(*registry, op);
     insertVDBVolumeFunctions(*registry, op);

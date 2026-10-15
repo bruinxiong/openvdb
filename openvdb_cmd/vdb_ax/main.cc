@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /// @file cmd/openvdb_ax.cc
 ///
@@ -791,9 +791,7 @@ main(int argc, char *argv[])
 
     if (opts.mMode.get() == openvdb::ax::VDB_AX_MODE::Execute) {
         // read vdb file data for
-        axlog("[INFO] Reading VDB data"
-            << (openvdb::io::Archive::isDelayedLoadingEnabled() ?
-                " (delay-load)" : "") << '\n');
+        axlog("[INFO] Reading VDB data" << '\n');
         for (const auto& filename : opts.mInputVDBFiles.get()) {
             openvdb::io::File file(filename);
             try {

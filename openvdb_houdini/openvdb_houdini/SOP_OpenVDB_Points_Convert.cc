@@ -1,5 +1,5 @@
 // Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /// @file SOP_OpenVDB_Points_Convert.cc
 ///
@@ -25,6 +25,7 @@
 #include <GU/GU_PackedGeometry.h>
 #include <GU/GU_PackedFragment.h>
 #include <GU/GU_PrimPacked.h>
+#include <SYS/SYS_Compiler.h>
 
 #include <stdexcept>
 #include <string>
@@ -76,7 +77,11 @@ public:
 
     static OP_Node* factory(OP_Network*, const char* name, OP_Operator*);
 
-    int isRefInput(unsigned i) const override { return (i == 1); }
+    int isRefInput(OP_InputIdx i) const override
+    {
+        UT_ASSERT(i >= 0);
+        return (i == 1);
+    }
 
     static OUTPUT_NAME_MODE getOutputNameMode(const std::string& modeName);
 
@@ -688,22 +693,9 @@ SOP_OpenVDB_Points_Convert::Cache::cookVDBSop(OP_Context& context)
                 // all attributes should be converted
                 const std::vector<std::string> emptyNameVector;
 
-                // if all point data is being converted, sequentially pre-fetch any out-of-core
-                // data for faster performance when using delayed-loading
-
-                const bool allData =    emptyNameVector.empty() &&
-                                        includeGroups.empty() &&
-                                        excludeGroups.empty();
-
                 for (const PointDataGrid::ConstPtr &grid : pointGrids) {
 
                     GU_Detail geo;
-
-                    // if all the data is being loaded, prefetch it for faster load performance
-
-                    if (allData) {
-                        prefetch(grid->tree());
-                    }
 
                     // perform conversion
 
@@ -727,7 +719,7 @@ SOP_OpenVDB_Points_Convert::Cache::cookVDBSop(OP_Context& context)
 
                 for (const PointDataGrid::ConstPtr &grid : pointGrids) {
 
-                    assert(i < pointNames.size());
+                    UT_ASSERT(i < pointNames.size());
                     const std::string gridName = pointNames[i++];
 
                     GU_Detail geo;
@@ -896,7 +888,7 @@ SOP_OpenVDB_Points_Convert::Cache::cookVDBSop(OP_Context& context)
                     }
 
                     const int16_t width(hvdb::attributeTupleSize(attribute));
-                    assert(width > 0);
+                    UT_ASSERT(width > 0);
 
                     const GA_TypeInfo typeInfo(attribute->getOptions().typeInfo());
 
@@ -993,7 +985,7 @@ SOP_OpenVDB_Points_Convert::Cache::cookVDBSop(OP_Context& context)
                     }
 
                     const int16_t width(hvdb::attributeTupleSize(attribute));
-                    assert(width > 0);
+                    UT_ASSERT(width > 0);
 
                     const GA_TypeInfo typeInfo(attribute->getOptions().typeInfo());
 

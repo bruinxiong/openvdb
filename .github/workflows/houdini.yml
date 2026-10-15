@@ -13,6 +13,7 @@ on:
       - 'doc/**'
       - 'nanovdb/**'
       - 'openvdb_maya/**'
+      - 'fvdb/**'
       - 'pendingchanges/**'
       - '**.md'
   pull_request:
@@ -24,11 +25,9 @@ on:
       - 'doc/**'
       - 'nanovdb/**'
       - 'openvdb_maya/**'
+      - 'fvdb/**'
       - 'pendingchanges/**'
       - '**.md'
-  schedule:
-    # run this workflow every day 7am UTC
-    - cron:  '0 7 * * *'
   workflow_dispatch:
 
 # Allow subsequent pushes to the same PR or REF to cancel any previous jobs.
@@ -63,8 +62,8 @@ jobs:
     if: >
       ${{ needs.checksecret.outputs.HOUDINI_SECRETS == 'true' ||
           github.repository_owner == 'AcademySoftwareFoundation' }}
-    runs-on: ${{ (github.repository_owner == 'AcademySoftwareFoundation' && 'ubuntu-20.04-8c-32g-300h') || 'ubuntu-latest' }}
-    name: hou:${{ matrix.config.hou_hash }}-vfx:${{ matrix.config.image }}-cxx:${{ matrix.config.cxx }}
+    runs-on: ${{ (github.repository_owner == 'AcademySoftwareFoundation' && 'ubuntu-latest-8c-32g-300h') || 'ubuntu-latest' }}
+    name: hou:${{ matrix.config.hou_hash }}-vfx:${{ matrix.config.image }}-cxx:${{ matrix.config.cxx }}-build:${{ matrix.config.build }}
     container:
       image: aswf/ci-base:${{ matrix.config.image }}
     env:
@@ -73,22 +72,18 @@ jobs:
     strategy:
       matrix:
         config:
-          - { cxx: clang++, image: '2023.0', hou_hash: '20_0-newabi', build: 'Release', components: 'core,hou,bin,view,render,python,test,axcore,axbin,axtest' }
-          - { cxx: clang++, image: '2022',   hou_hash: '20_0-oldabi', build: 'Release', components: 'core,hou' }
-          - { cxx: clang++, image: '2021',   hou_hash: '19_5',        build: 'Release', components: 'core,hou' }
-          - { cxx: clang++, image: '2023.0', hou_hash: '20_0-newabi', build: 'Debug',   components: 'core,hou,bin,view,render,python,test,axcore,axbin,axtest' }
-          - { cxx: g++,     image: '2023.0', hou_hash: '20_0-newabi', build: 'Release', components: 'core,hou,bin,view,render,python,test,axcore,axbin,axtest' }
-          - { cxx: g++,     image: '2022',   hou_hash: '20_0-oldabi', build: 'Release', components: 'core,hou' }
+          - { cxx: clang++, image: '2026', hou_hash: '22_0', build: 'Release', components: 'core,hou,bin,view,render,python,test,axcore,axbin,axtest' }
+          - { cxx: clang++, image: '2026', hou_hash: '22_0', build: 'Debug',   components: 'core,hou,bin,view,render,python,test,axcore,axbin,axtest' }
+          - { cxx: g++,     image: '2026', hou_hash: '22_0', build: 'Release', components: 'core,hou,bin,view,render,python,test,axcore,axbin,axtest' }
+          - { cxx: clang++, image: '2026', hou_hash: '21_0', build: 'Release', components: 'core,hou,bin,view,render,python,test,axcore,axbin,axtest' }
+          - { cxx: g++,     image: '2026', hou_hash: '21_0', build: 'Release', components: 'core,hou,bin,view,render,python,test,axcore,axbin,axtest' }
       fail-fast: false
     steps:
-      # See note on this step in the Houdini weekly.yml job
-      # We can remove this when we no longer use < 2023 images
-    - name: remove zstd
-      run: yum -y remove zstd
     - uses: actions/checkout@v3
-    - name: pybind11
-      #if: contains(matrix.config.image, '2023') == false
-      run: ./ci/install_pybind11.sh 2.10.0
+    - name: nanobind
+      run: ./ci/install_nanobind.sh 2.5.0
+    - name: install_gtest
+      run: ./ci/install_gtest.sh latest
     - name: timestamp
       id: timestamp
       run: echo "timestamp=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
@@ -119,7 +114,7 @@ jobs:
     - name: build
       run: |
         ./ci/build.sh -v \
-          --build-type=Release \
+          --build-type="${{ matrix.config.build }}" \
           --components="${{ matrix.config.components }}" \
           --cargs=\" \
             -DHOUDINI_ROOT=$HOME/houdini_install/hou \
@@ -129,6 +124,7 @@ jobs:
             -DDISABLE_DEPENDENCY_VERSION_CHECKS=ON \
             \"
     - name: test
+      if: matrix.config.build == 'Release'
       run: cd build && ctest -V
     # Keep ccache light by stripping out any caches not accessed in the last day
     - name: ccache_clean
@@ -159,12 +155,12 @@ jobs:
         cp hou/hou.tar.gz $HOME/houdini_install/hou.tar.gz
         cd $HOME/houdini_install && tar -xzf hou.tar.gz && cd -
     - name: install_deps
-      run: ./ci/install_macos.sh ${{ matrix.config.llvm }}
+      run: ./ci/install_macos.sh 20
     - name: build
       run: |
         ./ci/build.sh -v \
           --build-type=Release \
-          --components="core,hou,bin,view,render,python,test,axcore,axbin,axtest" \
+          --components="core,hou,bin,view,render,test,axcore,axbin" \
           --cargs=\" \
             -DHOUDINI_ROOT=$HOME/houdini_install/hou \
             -DOPENVDB_BUILD_HOUDINI_ABITESTS=OFF \
@@ -172,8 +168,8 @@ jobs:
             -DDISABLE_CMAKE_SEARCH_PATHS=ON \
             -DDISABLE_DEPENDENCY_VERSION_CHECKS=ON \
             -DUSE_EXPLICIT_INSTANTIATION=OFF \
-            -DLLVM_DIR=/usr/local/opt/llvm@15/lib/cmake/llvm \
-            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install
+            -DLLVM_DIR=/opt/homebrew/opt/llvm@20/lib/cmake/llvm \
+            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install \
             \"
     - name: test
       run: cd build && ctest -V
